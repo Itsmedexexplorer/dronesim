@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+test_twist.py
+test_alt_hold.py
+test_rate.py
+test_native_*.py
+test_import.py
+test_stream.py
+test_parse.py
+measure_latency.py
+get_altitude.py
+.DS_Store

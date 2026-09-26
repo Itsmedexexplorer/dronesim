@@ -1,0 +1,2475 @@
+<?xml version="1.0" ?>
+<!--
+  NIDAR AI Drone Simulation World - Strict 15m x 15m Covered Indoor Arena
+  Complies strictly with mission specifications:
+    - Arena Dimensions: 15m x 15m (-7.5m to +7.5m in X and Y, does not exceed 15m x 15m)
+    - Vertical Clearance: Exactly 8 feet (2.44m) in all corridors and rooms at all times
+    - Covered Top: Net-covered ceiling to simulate covered indoor / GPS-denied environment
+    - Standard Room Size: 2m x 2m
+    - Uniform Corridors: 1.40m clear width across all corridors (at least 1m)
+    - Designated Entry & Exit Point: South-West Staging Room (-5.1m, -5.1m)
+    - Damaged Building Theme: Modular maze with rooms, corridors, turns, junctions, pillars & rubble
+  Sensors on Drone:
+    - LiDAR 360° Laser Scanner (10 Hz, 16m range) -> /nidar/lidar
+    - Waveshare IMX219-83 Stereo Depth Camera (30 FPS) -> /nidar/stereo_camera
+    - Waveshare IMX335 5MP WDR Camera (30 FPS) -> /nidar/camera
+-->
+<sdf version="1.6">
+  <world name="nidar_world">
+    <physics name="4ms" type="ignored">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- World Plugins -->
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <!-- Overhead Indoor Floodlights (Simulating bright enclosed facility illumination) -->
+    <light type="directional" name="ambient_light">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.95 0.95 0.95 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.3 0.2 -0.9</direction>
+    </light>
+
+    <light type="point" name="facility_lamp_1">
+      <pose>-3.5 -3.5 2.35 0 0 0</pose>
+      <diffuse>0.65 0.65 0.68 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation><range>12</range><constant>0.6</constant><linear>0.05</linear><quadratic>0.01</quadratic></attenuation>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <light type="point" name="facility_lamp_2">
+      <pose>3.5 -3.5 2.35 0 0 0</pose>
+      <diffuse>0.65 0.65 0.68 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation><range>12</range><constant>0.6</constant><linear>0.05</linear><quadratic>0.01</quadratic></attenuation>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <light type="point" name="facility_lamp_3">
+      <pose>-3.5 3.5 2.35 0 0 0</pose>
+      <diffuse>0.65 0.65 0.68 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation><range>12</range><constant>0.6</constant><linear>0.05</linear><quadratic>0.01</quadratic></attenuation>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <light type="point" name="facility_lamp_4">
+      <pose>3.5 3.5 2.35 0 0 0</pose>
+      <diffuse>0.65 0.65 0.68 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation><range>12</range><constant>0.6</constant><linear>0.05</linear><quadratic>0.01</quadratic></attenuation>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <!-- Concrete Floor -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>60 60</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>60 60</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.74 0.76 0.78 1</ambient>
+            <diffuse>0.74 0.76 0.78 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Designated Entry & Exit Point Helipad (Outside South Gate at X=-5.8m, Y=-8.8m) -->
+    <model name="launch_pad">
+      <static>true</static>
+      <pose>-5.8 -8.8 0.005 0 0 1.5708</pose>
+      <link name="link">
+        <visual name="pad_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.85</radius>
+              <length>0.01</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.15 0.18 0.22 1</ambient>
+            <diffuse>0.15 0.18 0.22 1</diffuse>
+          </material>
+        </visual>
+        <visual name="inner_ring">
+          <pose>0 0 0.006 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.35</radius>
+              <length>0.002</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>1.0 0.7 0.0 1</ambient>
+            <diffuse>1.0 0.7 0.0 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ENTRY / EXIT Signage Banner Model (Mounted above South Gate header at Z=2.65m) -->
+    <model name="entry_exit_sign">
+      <static>true</static>
+      <pose>-5.80 -7.48 2.65 0 0 0</pose>
+      <link name="link">
+        <visual name="sign_visual">
+          <geometry>
+            <box><size>1.6 0.04 0.30</size></box>
+          </geometry>
+          <material>
+            <ambient>0.9 0.85 0.1 1</ambient>
+            <diffuse>0.9 0.85 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================================= -->
+    <!--  HELIPAD THREE-SIDED ENCLOSURE CHUTE (West, East, South)      -->
+    <!--  Covered on 3 sides; channels drone straight North (+Y)       -->
+    <!--  directly through the South Gate into the facility grid       -->
+    <!-- ============================================================= -->
+
+    <!-- Helipad Enclosure West Wall (X = -6.80m, Y = -7.50m to -9.80m) -->
+    <model name="helipad_enclosure_west">
+      <static>true</static>
+      <pose>-6.800 -8.650 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.300 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.300 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.310 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Helipad Enclosure East Wall (X = -4.80m, Y = -7.50m to -9.80m) -->
+    <model name="helipad_enclosure_east">
+      <static>true</static>
+      <pose>-4.800 -8.650 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.300 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.300 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.310 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Helipad Enclosure South/Rear Wall (Y = -9.80m, X = -6.80m to -4.80m) -->
+    <model name="helipad_enclosure_south">
+      <static>true</static>
+      <pose>-5.800 -9.800 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.080 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.080 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.090 0.090 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================================= -->
+    <!--  15m x 15m INDOOR ARENA: MODULAR WALLS, NET CEILING & RUBBLE  -->
+    <!-- ============================================================= -->
+
+    <!-- outer_wall_west -->
+    <model name="outer_wall_west">
+      <static>true</static>
+      <pose>-7.500 0.000 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 15.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 15.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 15.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- outer_wall_east -->
+    <model name="outer_wall_east">
+      <static>true</static>
+      <pose>7.500 0.000 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 15.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 15.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 15.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- outer_wall_north -->
+    <model name="outer_wall_north">
+      <static>true</static>
+      <pose>0.000 7.500 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>15.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>15.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>15.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- outer_wall_south_l -->
+    <model name="outer_wall_south_l">
+      <static>true</static>
+      <pose>-7.150 -7.500 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.700 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.700 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.710 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- outer_wall_south_r -->
+    <model name="outer_wall_south_r">
+      <static>true</static>
+      <pose>1.350 -7.500 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>12.300 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>12.300 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>12.310 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_0_west -->
+    <model name="room_0_0_west">
+      <static>true</static>
+      <pose>-6.100 -5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_0_east -->
+    <model name="room_0_0_east">
+      <static>true</static>
+      <pose>-4.100 -5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_0_north_l -->
+    <model name="room_0_0_north_l">
+      <static>true</static>
+      <pose>-5.850 -4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.500 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.500 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.510 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_0_north_r -->
+    <model name="room_0_0_north_r">
+      <static>true</static>
+      <pose>-4.350 -4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.500 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.500 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.510 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_0_south -->
+    <model name="room_1_0_south">
+      <static>true</static>
+      <pose>-1.700 -6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_0_north -->
+    <model name="room_1_0_north">
+      <static>true</static>
+      <pose>-1.700 -4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_0_west -->
+    <model name="room_1_0_west">
+      <static>true</static>
+      <pose>-2.700 -5.600 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_0_east -->
+    <model name="room_1_0_east">
+      <static>true</static>
+      <pose>-0.700 -5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_0_south -->
+    <model name="room_2_0_south">
+      <static>true</static>
+      <pose>1.700 -6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_0_west -->
+    <model name="room_2_0_west">
+      <static>true</static>
+      <pose>0.700 -5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_0_east -->
+    <model name="room_2_0_east">
+      <static>true</static>
+      <pose>2.700 -5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_0_north -->
+    <model name="room_2_0_north">
+      <static>true</static>
+      <pose>1.700 -4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>1.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>1.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_0_south -->
+    <model name="room_3_0_south">
+      <static>true</static>
+      <pose>5.100 -6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_0_north -->
+    <model name="room_3_0_north">
+      <static>true</static>
+      <pose>5.100 -4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_0_west -->
+    <model name="room_3_0_west">
+      <static>true</static>
+      <pose>4.100 -5.600 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_0_east -->
+    <model name="room_3_0_east">
+      <static>true</static>
+      <pose>6.100 -5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_1_west -->
+    <model name="room_0_1_west">
+      <static>true</static>
+      <pose>-6.100 -1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_1_south -->
+    <model name="room_0_1_south">
+      <static>true</static>
+      <pose>-5.100 -2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_1_north -->
+    <model name="room_0_1_north">
+      <static>true</static>
+      <pose>-5.100 -0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_1_east -->
+    <model name="room_0_1_east">
+      <static>true</static>
+      <pose>-4.100 -2.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_1_west -->
+    <model name="room_1_1_west">
+      <static>true</static>
+      <pose>-2.700 -1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_1_east -->
+    <model name="room_1_1_east">
+      <static>true</static>
+      <pose>-0.700 -1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_1_south -->
+    <model name="room_1_1_south">
+      <static>true</static>
+      <pose>-1.700 -2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>1.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>1.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_1_north -->
+    <model name="room_1_1_north">
+      <static>true</static>
+      <pose>-1.700 -0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>1.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>1.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_1_south -->
+    <model name="room_2_1_south">
+      <static>true</static>
+      <pose>1.700 -2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_1_east -->
+    <model name="room_2_1_east">
+      <static>true</static>
+      <pose>2.700 -1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_1_west -->
+    <model name="room_2_1_west">
+      <static>true</static>
+      <pose>0.700 -2.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_1_north -->
+    <model name="room_2_1_north">
+      <static>true</static>
+      <pose>1.700 -0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_1_north -->
+    <model name="room_3_1_north">
+      <static>true</static>
+      <pose>5.100 -0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_1_east -->
+    <model name="room_3_1_east">
+      <static>true</static>
+      <pose>6.100 -1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_1_south -->
+    <model name="room_3_1_south">
+      <static>true</static>
+      <pose>5.100 -2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_1_west -->
+    <model name="room_3_1_west">
+      <static>true</static>
+      <pose>4.100 -1.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_2_west -->
+    <model name="room_0_2_west">
+      <static>true</static>
+      <pose>-6.100 1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_2_east -->
+    <model name="room_0_2_east">
+      <static>true</static>
+      <pose>-4.100 1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_2_south -->
+    <model name="room_0_2_south">
+      <static>true</static>
+      <pose>-5.100 0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_2_north -->
+    <model name="room_0_2_north">
+      <static>true</static>
+      <pose>-5.100 2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>1.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>1.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_2_south -->
+    <model name="room_1_2_south">
+      <static>true</static>
+      <pose>-1.700 0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_2_north -->
+    <model name="room_1_2_north">
+      <static>true</static>
+      <pose>-1.700 2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_2_west -->
+    <model name="room_1_2_west">
+      <static>true</static>
+      <pose>-2.700 1.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_2_east -->
+    <model name="room_1_2_east">
+      <static>true</static>
+      <pose>-0.700 2.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_2_south -->
+    <model name="room_2_2_south">
+      <static>true</static>
+      <pose>1.700 0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_2_north -->
+    <model name="room_2_2_north">
+      <static>true</static>
+      <pose>1.700 2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_2_west -->
+    <model name="room_2_2_west">
+      <static>true</static>
+      <pose>0.700 1.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_2_east -->
+    <model name="room_2_2_east">
+      <static>true</static>
+      <pose>2.700 2.200 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_2_south -->
+    <model name="room_3_2_south">
+      <static>true</static>
+      <pose>5.100 0.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_2_east -->
+    <model name="room_3_2_east">
+      <static>true</static>
+      <pose>6.100 1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_2_west -->
+    <model name="room_3_2_west">
+      <static>true</static>
+      <pose>4.100 1.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_2_north -->
+    <model name="room_3_2_north">
+      <static>true</static>
+      <pose>5.100 2.700 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>1.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>1.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_3_west -->
+    <model name="room_0_3_west">
+      <static>true</static>
+      <pose>-6.100 5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_3_north -->
+    <model name="room_0_3_north">
+      <static>true</static>
+      <pose>-5.100 6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_3_south -->
+    <model name="room_0_3_south">
+      <static>true</static>
+      <pose>-5.100 4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_0_3_east -->
+    <model name="room_0_3_east">
+      <static>true</static>
+      <pose>-4.100 4.600 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_3_north -->
+    <model name="room_1_3_north">
+      <static>true</static>
+      <pose>-1.700 6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_3_south -->
+    <model name="room_1_3_south">
+      <static>true</static>
+      <pose>-1.700 4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_3_west -->
+    <model name="room_1_3_west">
+      <static>true</static>
+      <pose>-2.700 5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_1_3_east -->
+    <model name="room_1_3_east">
+      <static>true</static>
+      <pose>-0.700 5.600 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_3_north -->
+    <model name="room_2_3_north">
+      <static>true</static>
+      <pose>1.700 6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_3_south -->
+    <model name="room_2_3_south">
+      <static>true</static>
+      <pose>1.700 4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_3_east -->
+    <model name="room_2_3_east">
+      <static>true</static>
+      <pose>2.700 5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_2_3_west -->
+    <model name="room_2_3_west">
+      <static>true</static>
+      <pose>0.700 4.600 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 1.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 1.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 1.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_3_north -->
+    <model name="room_3_3_north">
+      <static>true</static>
+      <pose>5.100 6.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>2.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>2.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>2.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_3_east -->
+    <model name="room_3_3_east">
+      <static>true</static>
+      <pose>6.100 5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_3_west -->
+    <model name="room_3_3_west">
+      <static>true</static>
+      <pose>4.100 5.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.080 2.000 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>0.080 2.000 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>0.090 2.020 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- room_3_3_south -->
+    <model name="room_3_3_south">
+      <static>true</static>
+      <pose>5.100 4.100 1.220 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.000 0.080 2.440</size></box></geometry></collision>
+        <visual name="vis_panel">
+          <geometry><box><size>1.000 0.080 2.440</size></box></geometry>
+          <material>
+            <ambient>0.92 0.92 0.92 1</ambient>
+            <diffuse>0.92 0.92 0.92 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <!-- Top Metal Frame Trim -->
+        <visual name="top_trim">
+          <pose>0 0 1.220 0 0 0</pose>
+          <geometry><box><size>1.010 0.100 0.04</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- fallen_beam_1 -->
+    <model name="fallen_beam_1">
+      <static>true</static>
+      <pose>0.000 1.800 0.350 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.250 1.800 0.300</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.250 1.800 0.300</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.52 1</ambient>
+            <diffuse>0.5 0.5 0.52 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- fallen_beam_2 -->
+    <model name="fallen_beam_2">
+      <static>true</static>
+      <pose>-1.700 3.400 0.400 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1.800 0.250 0.300</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>1.800 0.250 0.300</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.52 1</ambient>
+            <diffuse>0.5 0.5 0.52 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- debris_block_1 -->
+    <model name="debris_block_1">
+      <static>true</static>
+      <pose>5.100 -1.700 0.400 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.600 0.600 0.800</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.600 0.600 0.800</size></box></geometry>
+          <material>
+            <ambient>0.55 0.45 0.38 1</ambient>
+            <diffuse>0.55 0.45 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- debris_block_2 -->
+    <model name="debris_block_2">
+      <static>true</static>
+      <pose>-5.100 1.700 0.300 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.500 0.700 0.600</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.500 0.700 0.600</size></box></geometry>
+          <material>
+            <ambient>0.55 0.45 0.38 1</ambient>
+            <diffuse>0.55 0.45 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- debris_pile_corridor -->
+    <model name="debris_pile_corridor">
+      <static>true</static>
+      <pose>3.400 -1.700 0.350 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.500 0.500 0.700</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.500 0.500 0.700</size></box></geometry>
+          <material>
+            <ambient>0.48 0.42 0.36 1</ambient>
+            <diffuse>0.48 0.42 0.36 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================================= -->
+    <!--     NIDAR AIRMOUSE CHALLENGE: 6 STANDING SURVIVOR MODELS     -->
+    <!-- ============================================================= -->
+
+    <!-- Survivor 1 (Room 0_1 - South-West Sector) -->
+    <model name="survivor_1">
+      <static>true</static>
+      <pose>-5.100 -1.700 0.875 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
+        <visual name="body">
+          <pose>0 0 -0.150 0 0 0</pose>
+          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
+            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+          </material>
+        </visual>
+        <visual name="safety_vest">
+          <pose>0 0 0.250 0 0 0</pose>
+          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
+          <material>
+            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
+            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
+          </material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 0.650 0 0 0</pose>
+          <geometry><sphere><radius>0.130</radius></sphere></geometry>
+          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Survivor 2 (Room 1_0 - South-Central Sector) -->
+    <model name="survivor_2">
+      <static>true</static>
+      <pose>-1.700 -5.100 0.875 0 0 0.785</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
+        <visual name="body">
+          <pose>0 0 -0.150 0 0 0</pose>
+          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
+            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+          </material>
+        </visual>
+        <visual name="safety_vest">
+          <pose>0 0 0.250 0 0 0</pose>
+          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
+          <material>
+            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
+            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
+          </material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 0.650 0 0 0</pose>
+          <geometry><sphere><radius>0.130</radius></sphere></geometry>
+          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Survivor 3 (Room 2_0 - South-East Sector) -->
+    <model name="survivor_3">
+      <static>true</static>
+      <pose>1.700 -3.400 0.875 0 0 1.571</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
+        <visual name="body">
+          <pose>0 0 -0.150 0 0 0</pose>
+          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
+            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+          </material>
+        </visual>
+        <visual name="safety_vest">
+          <pose>0 0 0.250 0 0 0</pose>
+          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
+          <material>
+            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
+            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
+          </material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 0.650 0 0 0</pose>
+          <geometry><sphere><radius>0.130</radius></sphere></geometry>
+          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Survivor 4 (Room 3_2 - East Sector) -->
+    <model name="survivor_4">
+      <static>true</static>
+      <pose>5.100 1.700 0.875 0 0 -0.523</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
+        <visual name="body">
+          <pose>0 0 -0.150 0 0 0</pose>
+          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
+            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+          </material>
+        </visual>
+        <visual name="safety_vest">
+          <pose>0 0 0.250 0 0 0</pose>
+          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
+          <material>
+            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
+            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
+          </material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 0.650 0 0 0</pose>
+          <geometry><sphere><radius>0.130</radius></sphere></geometry>
+          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Survivor 5 (Room 1_3 - North-Central Sector) -->
+    <model name="survivor_5">
+      <static>true</static>
+      <pose>-1.700 5.100 0.875 0 0 3.1415</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
+        <visual name="body">
+          <pose>0 0 -0.150 0 0 0</pose>
+          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
+            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+          </material>
+        </visual>
+        <visual name="safety_vest">
+          <pose>0 0 0.250 0 0 0</pose>
+          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
+          <material>
+            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
+            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
+          </material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 0.650 0 0 0</pose>
+          <geometry><sphere><radius>0.130</radius></sphere></geometry>
+          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Survivor 6 (Room 0_2 - North-West Sector) -->
+    <model name="survivor_6">
+      <static>true</static>
+      <pose>-5.100 3.400 0.875 0 0 -1.571</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
+        <visual name="body">
+          <pose>0 0 -0.150 0 0 0</pose>
+          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
+            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+          </material>
+        </visual>
+        <visual name="safety_vest">
+          <pose>0 0 0.250 0 0 0</pose>
+          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
+          <material>
+            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
+            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
+          </material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 0.650 0 0 0</pose>
+          <geometry><sphere><radius>0.130</radius></sphere></geometry>
+          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Overhead Safety Net & Indoor Ceiling Frame (8 feet / 2.44m clearance) -->
+    <model name="ceiling_net_cover">
+      <static>true</static>
+      <pose>0 0 2.440 0 0 0</pose>
+      <link name="net_link">
+        <collision name="net_collision">
+          <geometry>
+            <box><size>15.1 15.1 0.04</size></box>
+          </geometry>
+        </collision>
+        <!-- Translucent Dark Net Fabric Visual -->
+        <visual name="net_visual">
+          <geometry>
+            <box><size>15.0 15.0 0.02</size></box>
+          </geometry>
+          <material>
+            <ambient>0.12 0.12 0.14 0.82</ambient>
+            <diffuse>0.15 0.15 0.18 0.82</diffuse>
+            <specular>0.1 0.1 0.1 0.82</specular>
+          </material>
+        </visual>
+        <!-- Structural Overhead Cross-Ribs (Steel Cables) -->
+        <visual name="cable_x_neg3">
+          <pose>-3.4 0 0.02 1.5707963 0 0</pose>
+          <geometry><cylinder><radius>0.015</radius><length>15.0</length></cylinder></geometry>
+          <material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+        </visual>
+        <visual name="cable_x_0">
+          <pose>0 0 0.02 1.5707963 0 0</pose>
+          <geometry><cylinder><radius>0.015</radius><length>15.0</length></cylinder></geometry>
+          <material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+        </visual>
+        <visual name="cable_x_pos3">
+          <pose>3.4 0 0.02 1.5707963 0 0</pose>
+          <geometry><cylinder><radius>0.015</radius><length>15.0</length></cylinder></geometry>
+          <material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+
+    <!-- ============================================================= -->
+    <!--                   NIDAR AI DRONE MODEL                        -->
+    <!-- ============================================================= -->
+    <model name="x3">
+      <!-- Spawned at Designated Entry/Exit Pad Outside South Gate -->
+      <pose>-5.8 -8.8 0.0533 0 0 1.5708</pose>
+
+      <link name="X3/base_link">
+        <pose>0 0 0 0 0 0</pose>
+        <inertial>
+          <pose>0 0 0 0 0 0</pose>
+          <mass>1.955</mass>
+          <inertia>
+            <ixx>0.045</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>0.085</iyy>
+            <iyz>0</iyz>
+            <izz>0.115</izz>
+          </inertia>
+        </inertial>
+
+        <collision name="base_collision">
+          <geometry>
+            <box><size>0.47 0.47 0.16</size></box>
+          </geometry>
+        </collision>
+
+        <visual name="base_visual">
+          <geometry>
+            <mesh>
+              <scale>1 1 1</scale>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/x3 uav/4/files/meshes/x3.dae</uri>
+            </mesh>
+          </geometry>
+        </visual>
+
+        <!-- ================= SENSOR 1: LiDAR (Top Puck) ================= -->
+        <visual name="lidar_mount_visual">
+          <pose>0 0 0.065 0 0 0</pose>
+          <geometry><cylinder><radius>0.012</radius><length>0.04</length></cylinder></geometry>
+          <material><ambient>0.2 0.2 0.2 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <visual name="lidar_head_visual">
+          <pose>0 0 0.09 0 0 0</pose>
+          <geometry><cylinder><radius>0.035</radius><length>0.028</length></cylinder></geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.8 0.6 0.1 1</specular>
+          </material>
+        </visual>
+
+        <sensor name="lidar" type="gpu_lidar">
+          <pose>0 0 0.10 0 0 0</pose>
+          <topic>/nidar/lidar</topic>
+          <update_rate>10</update_rate>
+          <ray>
+            <scan>
+              <horizontal>
+                <samples>360</samples>
+                <resolution>1</resolution>
+                <min_angle>-3.14159265</min_angle>
+                <max_angle>3.14159265</max_angle>
+              </horizontal>
+              <vertical>
+                <samples>1</samples>
+                <resolution>1</resolution>
+                <min_angle>0</min_angle>
+                <max_angle>0</max_angle>
+              </vertical>
+            </scan>
+            <range>
+              <min>0.15</min>
+              <max>16.0</max>
+              <resolution>0.01</resolution>
+            </range>
+          </ray>
+          <always_on>1</always_on>
+          <visualize>true</visualize>
+        </sensor>
+
+        <!-- ================= SENSOR 2: Waveshare IMX219-83 Stereo Camera ================= -->
+        <visual name="imx219_stereo_bar">
+          <pose>0.16 0 0.025 0 0 0</pose>
+          <geometry><box><size>0.02 0.085 0.024</size></box></geometry>
+          <material><ambient>0.1 0.15 0.3 1</ambient><diffuse>0.1 0.15 0.3 1</diffuse></material>
+        </visual>
+        <visual name="imx219_left_lens">
+          <pose>0.171 0.03 0.025 0 1.5708 0</pose>
+          <geometry><cylinder><radius>0.007</radius><length>0.006</length></cylinder></geometry>
+          <material><ambient>0.0 0.6 0.8 1</ambient><diffuse>0.0 0.6 0.8 1</diffuse></material>
+        </visual>
+        <visual name="imx219_right_lens">
+          <pose>0.171 -0.03 0.025 0 1.5708 0</pose>
+          <geometry><cylinder><radius>0.007</radius><length>0.006</length></cylinder></geometry>
+          <material><ambient>0.0 0.6 0.8 1</ambient><diffuse>0.0 0.6 0.8 1</diffuse></material>
+        </visual>
+
+        <sensor name="imx219_stereo" type="rgbd_camera">
+          <pose>0.17 0 0.025 0 0 0</pose>
+          <topic>/nidar/stereo_camera</topic>
+          <update_rate>30</update_rate>
+          <camera>
+            <horizontal_fov>1.4486</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.1</near><far>15.0</far></clip>
+            <depth_camera><clip><near>0.2</near><far>10.0</far></clip></depth_camera>
+          </camera>
+          <always_on>1</always_on>
+          <visualize>true</visualize>
+        </sensor>
+
+        <!-- ================= SENSOR 3: Waveshare IMX335 5MP WDR Camera ================= -->
+        <visual name="imx335_housing">
+          <pose>0.15 0 -0.015 0 0.174 0</pose>
+          <geometry><box><size>0.028 0.028 0.025</size></box></geometry>
+          <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <visual name="imx335_lens">
+          <pose>0.165 0 -0.017 0 1.744 0</pose>
+          <geometry><cylinder><radius>0.009</radius><length>0.008</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
+        </visual>
+
+        <sensor name="imx335_camera" type="camera">
+          <pose>0.16 0 -0.015 0 0.174 0</pose>
+          <topic>/nidar/camera</topic>
+          <update_rate>30</update_rate>
+          <camera>
+            <horizontal_fov>1.92</horizontal_fov>
+            <image><width>1920</width><height>1080</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>50.0</far></clip>
+          </camera>
+          <always_on>1</always_on>
+          <visualize>true</visualize>
+        </sensor>
+
+        <!-- Electronics Payload -->
+        <visual name="esp32_board">
+          <pose>-0.03 0.04 0.018 0 0 0</pose>
+          <geometry><box><size>0.052 0.028 0.008</size></box></geometry>
+          <material><ambient>0.1 0.45 0.2 1</ambient><diffuse>0.1 0.45 0.2 1</diffuse></material>
+        </visual>
+        <visual name="dcdc_converter">
+          <pose>-0.03 -0.04 0.018 0 0 0</pose>
+          <geometry><box><size>0.065 0.036 0.018</size></box></geometry>
+          <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.15 0.25 0.5 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- ================= ROTORS & JOINTS ================= -->
+      <link name="X3/rotor_0">
+        <pose>0.13 -0.22 0.023 0 0 0</pose>
+        <inertial>
+          <mass>0.005</mass>
+          <inertia><ixx>9.75e-07</ixx><iyy>4.17e-05</iyy><izz>4.26e-05</izz></inertia>
+        </inertial>
+        <collision name="X3/rotor_0_collision">
+          <geometry><cylinder><length>0.005</length><radius>0.1</radius></cylinder></geometry>
+        </collision>
+        <visual name="X3/rotor_0_visual">
+          <geometry><mesh><scale>0.1 0.1 0.1</scale><uri>https://fuel.gazebosim.org/1.0/openrobotics/models/x3 uav/4/files/meshes/propeller_ccw.dae</uri></mesh></geometry>
+        </visual>
+      </link>
+      <joint name="X3/rotor_0_joint" type="revolute">
+        <child>X3/rotor_0</child>
+        <parent>X3/base_link</parent>
+        <axis><xyz>0 0 1</xyz></axis>
+      </joint>
+
+      <link name="X3/rotor_1">
+        <pose>-0.13 0.2 0.023 0 0 0</pose>
+        <inertial>
+          <mass>0.005</mass>
+          <inertia><ixx>9.75e-07</ixx><iyy>4.17e-05</iyy><izz>4.26e-05</izz></inertia>
+        </inertial>
+        <collision name="X3/rotor_1_collision">
+          <geometry><cylinder><length>0.005</length><radius>0.1</radius></cylinder></geometry>
+        </collision>
+        <visual name="X3/rotor_1_visual">
+          <geometry><mesh><scale>0.1 0.1 0.1</scale><uri>https://fuel.gazebosim.org/1.0/openrobotics/models/x3 uav/4/files/meshes/propeller_ccw.dae</uri></mesh></geometry>
+        </visual>
+      </link>
+      <joint name="X3/rotor_1_joint" type="revolute">
+        <child>X3/rotor_1</child>
+        <parent>X3/base_link</parent>
+        <axis><xyz>0 0 1</xyz></axis>
+      </joint>
+
+      <link name="X3/rotor_2">
+        <pose>0.13 0.22 0.023 0 0 0</pose>
+        <inertial>
+          <mass>0.005</mass>
+          <inertia><ixx>9.75e-07</ixx><iyy>4.17e-05</iyy><izz>4.26e-05</izz></inertia>
+        </inertial>
+        <collision name="X3/rotor_2_collision">
+          <geometry><cylinder><length>0.005</length><radius>0.1</radius></cylinder></geometry>
+        </collision>
+        <visual name="X3/rotor_2_visual">
+          <geometry><mesh><scale>0.1 0.1 0.1</scale><uri>https://fuel.gazebosim.org/1.0/openrobotics/models/x3 uav/4/files/meshes/propeller_cw.dae</uri></mesh></geometry>
+        </visual>
+      </link>
+      <joint name="X3/rotor_2_joint" type="revolute">
+        <child>X3/rotor_2</child>
+        <parent>X3/base_link</parent>
+        <axis><xyz>0 0 1</xyz></axis>
+      </joint>
+
+      <link name="X3/rotor_3">
+        <pose>-0.13 -0.2 0.023 0 0 0</pose>
+        <inertial>
+          <mass>0.005</mass>
+          <inertia><ixx>9.75e-07</ixx><iyy>4.17e-05</iyy><izz>4.26e-05</izz></inertia>
+        </inertial>
+        <collision name="X3/rotor_3_collision">
+          <geometry><cylinder><length>0.005</length><radius>0.1</radius></cylinder></geometry>
+        </collision>
+        <visual name="X3/rotor_3_visual">
+          <geometry><mesh><scale>0.1 0.1 0.1</scale><uri>https://fuel.gazebosim.org/1.0/openrobotics/models/x3 uav/4/files/meshes/propeller_cw.dae</uri></mesh></geometry>
+        </visual>
+      </link>
+      <joint name="X3/rotor_3_joint" type="revolute">
+        <child>X3/rotor_3</child>
+        <parent>X3/base_link</parent>
+        <axis><xyz>0 0 1</xyz></axis>
+      </joint>
+
+      <!-- ================= MOTOR DYNAMICS PLUGINS ================= -->
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>X3</robotNamespace>
+        <jointName>X3/rotor_0_joint</jointName>
+        <linkName>X3/rotor_0</linkName>
+        <turningDirection>ccw</turningDirection>
+        <timeConstantUp>0.0125</timeConstantUp>
+        <timeConstantDown>0.025</timeConstantDown>
+        <maxRotVelocity>950.0</maxRotVelocity>
+        <motorConstant>1.15e-05</motorConstant>
+        <momentConstant>0.016</momentConstant>
+        <commandSubTopic>gazebo/command/motor_speed</commandSubTopic>
+        <actuator_number>0</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient>
+        <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorSpeedPubTopic>motor_speed/0</motorSpeedPubTopic>
+        <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+        <motorType>velocity</motorType>
+      </plugin>
+
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>X3</robotNamespace>
+        <jointName>X3/rotor_1_joint</jointName>
+        <linkName>X3/rotor_1</linkName>
+        <turningDirection>ccw</turningDirection>
+        <timeConstantUp>0.0125</timeConstantUp>
+        <timeConstantDown>0.025</timeConstantDown>
+        <maxRotVelocity>950.0</maxRotVelocity>
+        <motorConstant>1.15e-05</motorConstant>
+        <momentConstant>0.016</momentConstant>
+        <commandSubTopic>gazebo/command/motor_speed</commandSubTopic>
+        <actuator_number>1</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient>
+        <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorSpeedPubTopic>motor_speed/1</motorSpeedPubTopic>
+        <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+        <motorType>velocity</motorType>
+      </plugin>
+
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>X3</robotNamespace>
+        <jointName>X3/rotor_2_joint</jointName>
+        <linkName>X3/rotor_2</linkName>
+        <turningDirection>cw</turningDirection>
+        <timeConstantUp>0.0125</timeConstantUp>
+        <timeConstantDown>0.025</timeConstantDown>
+        <maxRotVelocity>950.0</maxRotVelocity>
+        <motorConstant>1.15e-05</motorConstant>
+        <momentConstant>0.016</momentConstant>
+        <commandSubTopic>gazebo/command/motor_speed</commandSubTopic>
+        <actuator_number>2</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient>
+        <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorSpeedPubTopic>motor_speed/2</motorSpeedPubTopic>
+        <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+        <motorType>velocity</motorType>
+      </plugin>
+
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>X3</robotNamespace>
+        <jointName>X3/rotor_3_joint</jointName>
+        <linkName>X3/rotor_3</linkName>
+        <turningDirection>cw</turningDirection>
+        <timeConstantUp>0.0125</timeConstantUp>
+        <timeConstantDown>0.025</timeConstantDown>
+        <maxRotVelocity>950.0</maxRotVelocity>
+        <motorConstant>1.15e-05</motorConstant>
+        <momentConstant>0.016</momentConstant>
+        <commandSubTopic>gazebo/command/motor_speed</commandSubTopic>
+        <actuator_number>3</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient>
+        <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorSpeedPubTopic>motor_speed/3</motorSpeedPubTopic>
+        <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+        <motorType>velocity</motorType>
+      </plugin>
+
+      <!-- ================= 1000Hz FLIGHT CONTROLLER ================= -->
+      <plugin filename="gz-sim-multicopter-control-system" name="gz::sim::systems::MulticopterVelocityControl">
+        <robotNamespace>X3</robotNamespace>
+        <commandSubTopic>gazebo/command/twist</commandSubTopic>
+        <enableSubTopic>enable</enableSubTopic>
+        <comLinkName>X3/base_link</comLinkName>
+        <velocityGain>2.8 2.8 3.0</velocityGain>
+        <attitudeGain>2.4 3.2 0.2</attitudeGain>
+        <angularRateGain>0.45 0.55 0.2</angularRateGain>
+        <maximumLinearAcceleration>2.5 2.5 2.5</maximumLinearAcceleration>
+
+        <rotorConfiguration>
+          <rotor>
+            <jointName>X3/rotor_0_joint</jointName>
+            <forceConstant>1.15e-05</forceConstant>
+            <momentConstant>0.016</momentConstant>
+            <direction>1</direction>
+          </rotor>
+          <rotor>
+            <jointName>X3/rotor_1_joint</jointName>
+            <forceConstant>1.15e-05</forceConstant>
+            <momentConstant>0.016</momentConstant>
+            <direction>1</direction>
+          </rotor>
+          <rotor>
+            <jointName>X3/rotor_2_joint</jointName>
+            <forceConstant>1.15e-05</forceConstant>
+            <momentConstant>0.016</momentConstant>
+            <direction>-1</direction>
+          </rotor>
+          <rotor>
+            <jointName>X3/rotor_3_joint</jointName>
+            <forceConstant>1.15e-05</forceConstant>
+            <momentConstant>0.016</momentConstant>
+            <direction>-1</direction>
+          </rotor>
+        </rotorConfiguration>
+      </plugin>
+
+      <!-- Odometry Publisher -->
+      <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+        <dimensions>3</dimensions>
+      </plugin>
+    </model>
+  </world>
+</sdf>
