@@ -532,7 +532,7 @@ class CameraViewerWidget(QWidget):
         # Stats
         painter.setFont(QFont(SPATIAL_MONO, 9, QFont.Bold))
         painter.setPen(QColor(226, 232, 240))
-        painter.drawText(QRect(cx, cy + 76, card_w, 22), Qt.AlignCenter, f"Coverage: {cov:.1f}%  |  Survivors: {surv}/6")
+        painter.drawText(QRect(cx, cy + 76, card_w, 22), Qt.AlignCenter, f"Coverage: {cov:.1f}%  |  Survivors: {surv}")
 
         painter.setFont(QFont(SPATIAL_FONT, 8))
         painter.setPen(QColor(148, 163, 184))

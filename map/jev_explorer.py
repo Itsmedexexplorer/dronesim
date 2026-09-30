@@ -105,7 +105,6 @@ class JevDecisionLayer(Node):
         self.declare_parameter('camera_scan_headings', 5)
         self.declare_parameter('camera_scan_dwell_s', 0.70)
         self.declare_parameter('camera_scan_goal_timeout_s', 6.0)
-        self.declare_parameter('expected_survivors', 6)
         self.rotation_in_place = False
         self.camera_scan_enabled = bool(
             self.get_parameter('camera_scan_enabled').value)
@@ -115,8 +114,6 @@ class JevDecisionLayer(Node):
             self.get_parameter('camera_scan_dwell_s').value))
         self.scan_goal_timeout_s = max(2.0, float(
             self.get_parameter('camera_scan_goal_timeout_s').value))
-        self.expected_survivors = max(0, int(
-            self.get_parameter('expected_survivors').value))
         self.visual_scan_locations = []
         self.sub_route = self.create_subscription(Path, '/plan', self.cb_route, 10)
         self.sub_obstacles = self.create_subscription(LaserScan, '/scan', self.cb_obstacles, qos_profile_sensor_data)
@@ -638,15 +635,20 @@ class JevDecisionLayer(Node):
 
             coverage_complete = sectors_toured and (
                 cov >= 95.0 or (cov >= 92.0 and len(frontiers) == 0))
-            survivor_goal_met = (self.expected_survivors == 0 or
-                                 self.survivor_count >= self.expected_survivors)
-            # LiDAR coverage is not visual coverage.  Do not end an autonomous
-            # rescue mission merely because walls were mapped through doorways.
-            return_needed = self.return_requested or (
-                coverage_complete and survivor_goal_met)
+            recovery_goal = (self.find_visual_recovery_goal()
+                             if coverage_complete else None)
+            with self.inspection_lock:
+                pending_inspection_count = len(self.pending_inspections)
+            # There is deliberately no survivor-count target or maximum. The
+            # autonomous mission ends only after both LiDAR and camera-viewpoint
+            # coverage are exhausted and no active prospect remains to inspect.
+            visual_search_complete = (
+                coverage_complete and recovery_goal is None and
+                pending_inspection_count == 0)
+            return_needed = self.return_requested or visual_search_complete
             self.publish_status(
-                f"QUESTION: Cov={cov:.1f}% | Survivors="
-                f"{self.survivor_count}/{self.expected_survivors or '?'} | "
+                f"QUESTION: Cov={cov:.1f}% | Confirmed={self.survivor_count} | "
+                f"Visual gaps={'YES' if recovery_goal is not None else 'NO'} | "
                 f"Toured W={has_visited_west}/E={has_visited_east}")
 
             if return_needed:
@@ -694,21 +696,18 @@ class JevDecisionLayer(Node):
             self.publish_status("THINK: Evaluating Frontier Heuristics & Obstacle Safety")
             best_action = None
 
-            # Once LiDAR mapping is effectively complete, deliberately fill
-            # gaps in camera viewpoint coverage until the expected survivor
-            # count is reached.  This prevents the observed four-person stall.
-            if coverage_complete and not survivor_goal_met:
-                recovery_goal = self.find_visual_recovery_goal()
-                if recovery_goal is not None:
-                    rx, ry = recovery_goal
-                    self.publish_status(
-                        f"VISUAL RECOVERY: {self.survivor_count}/"
-                        f"{self.expected_survivors} confirmed; scanning unseen viewpoint")
-                    self.get_logger().info(
-                        f'👁️ [JEV] LiDAR coverage complete but only '
-                        f'{self.survivor_count}/{self.expected_survivors} survivors confirmed; '
-                        f'camera-recovery waypoint=({rx:+.2f}, {ry:+.2f}).')
-                    best_action = {'x': rx, 'y': ry, 'sz': 0}
+            # Once LiDAR mapping is effectively complete, fill every remaining
+            # camera-viewpoint gap regardless of the current survivor count.
+            if coverage_complete and recovery_goal is not None:
+                rx, ry = recovery_goal
+                self.publish_status(
+                    f"VISUAL RECOVERY: {self.survivor_count} confirmed; "
+                    f"scanning unseen viewpoint")
+                self.get_logger().info(
+                    f'👁️ [JEV] Continuing count-independent visual search; '
+                    f'{self.survivor_count} survivors currently confirmed, '
+                    f'camera-recovery waypoint=({rx:+.2f}, {ry:+.2f}).')
+                best_action = {'x': rx, 'y': ry, 'sz': 0}
 
             if best_action is None and len(frontiers) > 0:
                 valid_options = []

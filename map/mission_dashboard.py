@@ -92,7 +92,7 @@ class MissionDashboard(Node):
                 self.completion_time = time.time()
                 elapsed = self.completion_time - self.start_time
                 m, s = divmod(int(elapsed), 60)
-                self.get_logger().info(f'🏁 [MISSION COMPLETED] Total Time Taken: {m:02d}m {s:02d}s | Survivors: {self.survivor_count}/6')
+                self.get_logger().info(f'🏁 [MISSION COMPLETED] Total Time Taken: {m:02d}m {s:02d}s | Survivors: {self.survivor_count}')
             elif not msg.data and self.is_completed:
                 self.is_completed = False
                 self.completion_time = None

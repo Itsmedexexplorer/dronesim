@@ -398,7 +398,7 @@ class NidarSlamNode(Node):
             ax_a.set_ylabel("Y (meters, ENU frame)", fontsize=11)
             ax_a.set_title(
                 f"NIDAR Autonomous Drone — Final 2D Search & Occupancy Map\n"
-                f"Survivors Located: {len(survivors)}/6  |  Explored Free Area: {free_m2:.1f} m²  |  "
+                f"Survivors Located: {len(survivors)}  |  Explored Free Area: {free_m2:.1f} m²  |  "
                 f"Coverage: {cov_pct:.1f}%  |  Saved: {time.strftime('%Y-%m-%d %H:%M:%S')}",
                 fontsize=11, fontweight="bold"
             )
@@ -409,7 +409,7 @@ class NidarSlamNode(Node):
                 mpatches.Patch(color=[0.63, 0.63, 0.63], label="Unexplored"),
                 mpatches.Patch(color='#00aaff', label="Flight Path"),
                 mpatches.Patch(color='#00cc44', label="Helipad (Start / Touchdown)"),
-                mpatches.Patch(color='#ff0000', label=f"Survivors Tagged ({len(survivors)}/6)"),
+                mpatches.Patch(color='#ff0000', label=f"Survivors Tagged ({len(survivors)})"),
             ]
             ax_a.legend(handles=legend_handles, loc="upper right", fontsize=9, framealpha=0.92)
 

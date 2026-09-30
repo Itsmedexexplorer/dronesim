@@ -19,7 +19,7 @@ The NIDAR AirMouse drone executes end-to-end autonomous search and rescue missio
 4. **Active 360° LiDAR Reactive Collision Shield**: Continuous 30 Hz proximity monitor computes an inverse-distance repulsive velocity field. If any wall or corner approaches $< 0.35\text{ m}$, the coordinator triggers an instant **hard brake and pushback**, completely preventing collisions.
 5. **Human / Survivor Detection & 2D Map Tagging**: Onboard computer vision node (`nidar_survivor_detector.py`) inspects the 5MP WDR camera feed (`/nidar/camera`) in real-time, segments International Rescue Orange suits and fluorescent yellow safety vests, projects pixel centroids to map coordinates, and tags them with persistent 3D pins and floating text labels (`Survivor #N (X, Y)`).
 6. **Permanent 2D Map Etching**: Confirmed survivor coordinates are automatically stamped as occupied obstacles directly onto the `/map` SLAM grid.
-7. **Autonomous Exit & Precision Touchdown**: Once all 6 survivors are found (or arena coverage reaches $\ge 85\%$), the explorer aborts search routines, plots an exit trajectory through the South Gate, returns to the Launch Helipad, descends softly at $-0.25\text{ m/s}$, cuts the motors, and disarms.
+7. **Autonomous Exit & Precision Touchdown**: The explorer has no survivor-count cap. It returns only after LiDAR coverage, camera-viewpoint recovery, and queued inspections are complete, then plots an exit trajectory through the South Gate, descends softly at $-0.25\text{ m/s}$, cuts the motors, and disarms.
 
 ---
 
@@ -72,7 +72,7 @@ flowchart TD
 
 The facility contains **6 realistic standing survivor mannequins** ($1.75\text{ m}$ tall, $0.48\text{ m}$ diameter) equipped with high-visibility International Rescue Orange suits and fluorescent yellow reflective safety vests, placed in unknown rooms throughout the grid.
 
-- **Blind Autonomous Search**: The drone operates with zero prior knowledge of survivor locations and must discover all 6 survivors autonomously using its onboard sensors.
+- **Blind Autonomous Search**: The drone operates with zero prior knowledge of survivor locations or count and discovers as many survivors as its onboard sensors can confirm.
 - **Multimodal Localization**:
   - **360° LiDAR**: Since the mannequins stand $1.75\text{ m}$ tall, the drone's horizontal LiDAR at flight altitude ($1.50\text{ m}$) strikes their torso and head directly, drawing them geometrically as obstacles on the 2D SLAM grid (`/map`).
   - **Onboard Vision**: The 5MP WDR camera detects the vibrant rescue orange and fluorescent yellow colors at eye level, estimating range and relative bearing.
@@ -197,7 +197,8 @@ The script orchestrates the entire operational pipeline automatically:
 
 ## 🏁 Mission Completion & Autonomous Exit
 
-When `survivor_count >= 6` or exploration coverage $\ge 85\%$:
+When LiDAR coverage is complete, no unscanned camera-viewpoint gaps remain, and
+the active inspection queue is empty:
 1. The explorer cancels frontier tasks and transitions to `EXITING_MAZE`.
 2. Plans a path through the South Gate interior corridor $(-5.80, -6.00)$.
 3. Flies out through the gate to the Launch Helipad $(-5.80, -8.80)$.
