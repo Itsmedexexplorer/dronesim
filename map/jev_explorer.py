@@ -6,14 +6,16 @@ import time
 import math
 import signal
 import threading
+import json
 import numpy as np
 
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Path
+from sensor_msgs.msg import LaserScan
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import Int32, Bool, String
@@ -57,21 +59,31 @@ class JevDecisionLayer(Node):
 
         # Subscriptions
         self.sub_pose = self.create_subscription(PoseStamped, '/mavros/local_position/pose', self.cb_pose, 10)
-        
+
         map_qos = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL, reliability=QoSReliabilityPolicy.RELIABLE)
         self.sub_map = self.create_subscription(OccupancyGrid, '/map', self.cb_map, map_qos)
 
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        
+
         self.survivor_count = 0
         self.mission_complete_received = False
         self.return_requested = False
+        self.survivors_detailed = []
+        self.inspection_lock = threading.Lock()
+        # Keep a deduplicated queue instead of one overwriteable target.  A
+        # burst of LiDAR prospects must not erase a person waiting for a
+        # close-range RGB-D inspection.
+        self.pending_inspections = {}
+        self.inspection_cooldowns = {}
         self.sub_survivors = self.create_subscription(Int32, '/nidar/survivor_count', self.cb_survivor_count, 10)
+        self.sub_surv_detailed = self.create_subscription(String, '/nidar/survivors_detailed', self.cb_survivors_detailed, 10)
         self.sub_complete = self.create_subscription(Bool, '/nidar/mission_complete', self.cb_mission_complete, 10)
         self.sub_land = self.create_subscription(Bool, '/nidar/land_command', self.cb_land_cmd, 10)
         self.sub_relaunch = self.create_subscription(Bool, '/nidar/relaunch_command', self.cb_relaunch_cmd, 10)
+        self.sub_inspection = self.create_subscription(
+            PoseStamped, '/nidar/inspection_target', self.cb_inspection_target, 10)
         self.relaunch_requested = False
-        
+
         self.pub_land_cmd = self.create_publisher(Bool, '/nidar/land_command', 10)
         self.pub_complete = self.create_publisher(Bool, '/nidar/mission_complete', 10)
         self.pub_goal = self.create_publisher(PoseStamped, '/nidar/current_goal', 10)
@@ -80,11 +92,159 @@ class JevDecisionLayer(Node):
         self.active_goal_handle = None
         self.goal_status = None
         self.is_acting = False
+        self.goal_generation = 0
+        self.cancel_pending = False
+        self.blocked_targets = []
+        self.route = []
+        self.blocked_scan_hits = 0
+        self.current_target = None
+        # The survivor detector deliberately uses the front RGB-D stream.  A
+        # short in-place sweep therefore gives it true 360-degree coverage
+        # without fabricating depth for the left/right RGB-only cameras.
+        self.declare_parameter('camera_scan_enabled', True)
+        self.declare_parameter('camera_scan_headings', 5)
+        self.declare_parameter('camera_scan_dwell_s', 0.70)
+        self.declare_parameter('camera_scan_goal_timeout_s', 6.0)
+        self.declare_parameter('expected_survivors', 6)
+        self.rotation_in_place = False
+        self.camera_scan_enabled = bool(
+            self.get_parameter('camera_scan_enabled').value)
+        self.scan_headings = max(2, int(
+            self.get_parameter('camera_scan_headings').value))
+        self.scan_dwell_s = max(0.25, float(
+            self.get_parameter('camera_scan_dwell_s').value))
+        self.scan_goal_timeout_s = max(2.0, float(
+            self.get_parameter('camera_scan_goal_timeout_s').value))
+        self.expected_survivors = max(0, int(
+            self.get_parameter('expected_survivors').value))
+        self.visual_scan_locations = []
+        self.sub_route = self.create_subscription(Path, '/plan', self.cb_route, 10)
+        self.sub_obstacles = self.create_subscription(LaserScan, '/scan', self.cb_obstacles, qos_profile_sensor_data)
 
         self.thread = threading.Thread(target=self.jev_core_loop, daemon=True)
         self.thread.start()
 
     def cb_survivor_count(self, msg: Int32): self.survivor_count = msg.data
+
+    def cb_route(self, msg):
+        if msg.header.frame_id == 'map':
+            self.route = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+
+    def cb_obstacles(self, msg):
+        if (getattr(self, 'rotation_in_place', False) or not self.is_acting or
+                not self.route or self.cancel_pending):
+            return
+        with self.pose_lock:
+            x, y = self.drone_x, self.drone_y
+            yaw = getattr(self, 'drone_yaw', 0.0)
+        route = np.asarray(self.route)
+        nearest = int(np.argmin(np.sum((route - [x, y]) ** 2, axis=1)))
+        ahead = route[nearest:]
+        ahead = ahead[np.linalg.norm(ahead - [x, y], axis=1) <= 1.0]
+        if not len(ahead):
+            return
+        obstructed = False
+        for i, distance in enumerate(msg.ranges):
+            if not np.isfinite(distance) or not msg.range_min < distance < min(msg.range_max, 1.6):
+                continue
+            angle = yaw + msg.angle_min + i * msg.angle_increment
+            point = [x + distance * math.cos(angle), y + distance * math.sin(angle)]
+            if np.min(np.linalg.norm(ahead - point, axis=1)) < 0.38:
+                obstructed = True
+                break
+        self.blocked_scan_hits = self.blocked_scan_hits + 1 if obstructed else 0
+        threshold = getattr(self, 'blocked_scan_threshold', 2)
+        if self.blocked_scan_hits >= threshold:
+            if self.current_target:
+                self.blocked_targets.append((*self.current_target, time.monotonic() + 25.0))
+            try:
+                self.get_logger().warning(f'⚡ [JEV] Dynamic obstacle/survivor detected on path! Rapid evasive replan triggered.')
+            except Exception:
+                pass
+            self.cancel_current_action()
+            self.goal_status = 'BLOCKED'
+    def cb_survivors_detailed(self, msg: String):
+        try:
+            data = json.loads(msg.data)
+            self.survivors_detailed = data
+            self.survivor_count = len(data)
+        except Exception:
+            pass
+
+    def cb_inspection_target(self, msg: PoseStamped):
+        """Queue a plausible object for close-range (<=2m) classification."""
+        tx, ty = float(msg.pose.position.x), float(msg.pose.position.y)
+        now = time.time()
+        if abs(tx) > ARENA_LIMIT or abs(ty) > ARENA_LIMIT:
+            return
+        if any(math.hypot(tx - s.get('x', s.get('map_x', 99.0)),
+                          ty - s.get('y', s.get('map_y', 99.0))) < 0.75
+               for s in self.survivors_detailed):
+            return
+        key = (round(tx * 2.0) / 2.0, round(ty * 2.0) / 2.0)
+        if now < self.inspection_cooldowns.get(key, 0.0):
+            return
+        with self.inspection_lock:
+            self.pending_inspections[key] = (tx, ty, key, now)
+            # Bound noise from imperfect geometric prospects while retaining
+            # the newest observation for every spatial cell.
+            if len(self.pending_inspections) > 24:
+                oldest = min(self.pending_inspections,
+                             key=lambda k: self.pending_inspections[k][3])
+                del self.pending_inspections[oldest]
+
+    def _next_inspection(self):
+        """Return the nearest fresh queued prospect without losing the rest."""
+        now = time.time()
+        with self.pose_lock:
+            cx, cy = self.drone_x, self.drone_y
+        with self.inspection_lock:
+            stale = [key for key, item in self.pending_inspections.items()
+                     if now - item[3] >= 30.0]
+            for key in stale:
+                del self.pending_inspections[key]
+            eligible = [item for key, item in self.pending_inspections.items()
+                        if now >= self.inspection_cooldowns.get(key, 0.0)]
+            if not eligible:
+                return None
+            chosen = min(eligible,
+                         key=lambda item: math.hypot(item[0] - cx, item[1] - cy))
+            self.pending_inspections.pop(chosen[2], None)
+            return chosen
+
+    def _inspection_goal(self, tx, ty):
+        """Choose a free map cell 1.2-1.6m from an object, facing it."""
+        with self.pose_lock:
+            cx, cy = self.drone_x, self.drone_y
+        base_angle = math.atan2(cy - ty, cx - tx)
+        candidates = []
+        for radius in (1.35, 1.60, 1.15):
+            for offset in (0.0, 0.35, -0.35, 0.70, -0.70):
+                angle = base_angle + offset
+                gx = tx + radius * math.cos(angle)
+                gy = ty + radius * math.sin(angle)
+                candidates.append((gx, gy, math.hypot(gx - cx, gy - cy)))
+
+        with self.grid_lock:
+            grid = None if self.grid is None else self.grid.copy()
+            info = self.map_info
+        if grid is None or info is None:
+            return None
+
+        safe = []
+        for gx, gy, travel in candidates:
+            col = int((gx - info.origin.position.x) / info.resolution)
+            row = int((gy - info.origin.position.y) / info.resolution)
+            clearance = max(1, int(0.32 / info.resolution))
+            if not (clearance <= row < info.height-clearance and clearance <= col < info.width-clearance):
+                continue
+            patch = grid[row-clearance:row+clearance+1, col-clearance:col+clearance+1]
+            if patch.size and np.all((patch >= 0) & (patch < 65)):
+                safe.append((travel, gx, gy))
+        if not safe:
+            return None
+        _, gx, gy = min(safe)
+        return gx, gy
     def cb_mission_complete(self, msg: Bool): self.mission_complete_received = msg.data
     def cb_land_cmd(self, msg: Bool):
         if msg.data:
@@ -98,15 +258,21 @@ class JevDecisionLayer(Node):
             self.return_requested = False
             self.relaunch_requested = True
             self.mission_complete_received = False
+            with self.inspection_lock:
+                self.pending_inspections.clear()
+            self.inspection_cooldowns.clear()
+            self.visual_scan_locations.clear()
             self.cancel_current_action()
 
     def publish_status(self, text: str):
         msg = String()
         msg.data = text
         self.pub_status.publish(msg)
-    
+
     def cb_pose(self, msg: PoseStamped):
         with self.pose_lock:
+            q = msg.pose.orientation
+            self.drone_yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
             self.drone_x = msg.pose.position.x
             self.drone_y = msg.pose.position.y
             self.drone_z = msg.pose.position.z
@@ -145,7 +311,7 @@ class JevDecisionLayer(Node):
         free_cells = (g == FREE)
         unknown_cells = (g == UNKNOWN)
         f_mask = np.zeros_like(free_cells)
-        
+
         for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             shifted = np.zeros_like(unknown_cells)
             r_dst = slice(max(0, dr), min(h, h + dr))
@@ -158,7 +324,7 @@ class JevDecisionLayer(Node):
         frontier_r, frontier_c = np.where(f_mask)
         f_set = set(zip(frontier_c, frontier_r))
         clusters, visited = [], set()
-        
+
         for cell in f_set:
             if cell in visited: continue
             cluster, queue = [], [cell]
@@ -179,9 +345,9 @@ class JevDecisionLayer(Node):
                 wx = ox + (avg_c + 0.5) * res
                 wy = oy + (avg_r + 0.5) * res
                 if abs(wx) <= 6.9 and abs(wy) <= 6.9 and wy >= -6.8: # Full 15x15m indoor compound
-                    # Buffer away from nearby walls into free space
+                    # Medial axis corridor centering: buffer away from nearby walls into open space
                     safe_c, safe_r = int(round((wx - ox) / res)), int(round((wy - oy) / res))
-                    check_rad = 6
+                    check_rad = 10  # 0.50m safety check
                     r0 = max(0, safe_r - check_rad)
                     r1 = min(h, safe_r + check_rad + 1)
                     c0 = max(0, safe_c - check_rad)
@@ -193,14 +359,84 @@ class JevDecisionLayer(Node):
                         wall_wx = ox + (wall_c + 0.5) * res
                         wall_wy = oy + (wall_r + 0.5) * res
                         away_angle = math.atan2(wy - wall_wy, wx - wall_wx)
-                        wx += 0.32 * math.cos(away_angle)
-                        wy += 0.32 * math.sin(away_angle)
+                        wx += 0.45 * math.cos(away_angle)
+                        wy += 0.45 * math.sin(away_angle)
                     wx = float(np.clip(wx, -6.85, 6.85))
                     wy = float(np.clip(wy, -6.85, 6.85))
                     clusters.append((wx, wy, len(cluster)))
         return clusters
 
-    def _act_navigate(self, x, y):
+    def find_visual_recovery_goal(self):
+        """Choose a safe map cell least covered by previous 360-degree scans.
+
+        LiDAR can map a room through a doorway without the RGB-D camera ever
+        obtaining a useful human view.  This independent visual-coverage pass
+        samples known free space and moves the camera to the largest remaining
+        viewpoint gap.  It uses only the live occupancy map, never survivor or
+        ground-truth coordinates.
+        """
+        with self.grid_lock:
+            if self.grid is None or self.map_info is None:
+                return None
+            grid = self.grid.copy()
+            info = self.map_info
+        with self.pose_lock:
+            cx, cy = self.drone_x, self.drone_y
+
+        resolution = float(info.resolution)
+        stride = max(1, int(0.55 / resolution))
+        clearance = max(1, int(0.38 / resolution))
+        references = list(self.visual_scan_locations)
+        if not references:
+            references = list(self.memory['visited_locations'])
+        candidates = []
+        for row in range(clearance, info.height - clearance, stride):
+            for col in range(clearance, info.width - clearance, stride):
+                wx = info.origin.position.x + (col + 0.5) * resolution
+                wy = info.origin.position.y + (row + 0.5) * resolution
+                if abs(wx) > 6.85 or abs(wy) > 6.85 or wy < -6.8:
+                    continue
+                patch = grid[row-clearance:row+clearance+1,
+                             col-clearance:col+clearance+1]
+                if patch.size == 0 or not np.all((patch >= 0) & (patch < 65)):
+                    continue
+                travel = math.hypot(wx - cx, wy - cy)
+                if travel < 0.70:
+                    continue
+                visual_gap = (min(math.hypot(wx - sx, wy - sy)
+                                  for sx, sy in references)
+                              if references else travel)
+                if visual_gap < 0.85:
+                    continue
+                blocked = any(expiry > time.monotonic() and
+                              math.hypot(wx - bx, wy - by) < 1.0
+                              for bx, by, expiry in self.blocked_targets)
+                if blocked:
+                    continue
+                # Maximise unseen visual coverage with a small travel penalty.
+                candidates.append((visual_gap - 0.12 * travel, wx, wy))
+        if not candidates:
+            return None
+        _, wx, wy = max(candidates)
+        return float(wx), float(wy)
+
+    def _act_navigate(self, x, y, face_target=None, target_yaw=None,
+                      ignore_blocked=False):
+        if self.cancel_pending:
+            return
+        now = time.monotonic()
+        self.blocked_targets = [(bx, by, expiry) for bx, by, expiry in self.blocked_targets
+                                if expiry > now]
+        if (not ignore_blocked and
+                any(math.hypot(x-bx, y-by) < 1.0 for bx, by, _ in self.blocked_targets)):
+            self.goal_status = 'COOLDOWN'
+            return
+        self.goal_generation += 1
+        generation = self.goal_generation
+        self.current_target = (x, y)
+        self.active_goal_handle = None
+        self.route = []
+        self.blocked_scan_hits = 0
         self.get_logger().info(f'🧠 [JEV] ACT: Dispatching Nav2 Goal to ({x:.2f}, {y:.2f})')
         goal = NavigateToPose.Goal()
         goal.pose.header.stamp = self.get_clock().now().to_msg()
@@ -210,19 +446,77 @@ class JevDecisionLayer(Node):
         goal.pose.pose.position.z = 1.50
         with self.pose_lock: cx, cy = self.drone_x, self.drone_y
         yaw = math.atan2(y - cy, x - cx)
+        if face_target is not None:
+            yaw = math.atan2(face_target[1] - y, face_target[0] - x)
+        if target_yaw is not None:
+            yaw = float(target_yaw)
         goal.pose.pose.orientation.z = math.sin(yaw / 2.0)
         goal.pose.pose.orientation.w = math.cos(yaw / 2.0)
-        
+
         # Publish current goal for GCS visualizer
         self.pub_goal.publish(goal.pose)
 
         self.is_acting = True
         self.goal_status = "PENDING"
         future = self.nav_client.send_goal_async(goal)
-        future.add_done_callback(self._goal_response_cb)
+        future.add_done_callback(lambda result: self._goal_response_cb(result, generation))
 
-    def _goal_response_cb(self, future):
+    def _scan_360_at_current_position(self):
+        """Actively sweep the front RGB-D camera through the complete azimuth."""
+        if (not self.camera_scan_enabled or self.return_requested or
+                self.scan_headings < 2):
+            return
+        # Allow a just-cancelled proximity goal to finish its action callback.
+        wait_until = time.time() + 3.0
+        while self.cancel_pending and time.time() < wait_until and rclpy.ok():
+            time.sleep(0.05)
+        if self.cancel_pending:
+            self.get_logger().warning(
+                '[JEV] Skipping camera sweep: previous Nav2 cancellation is still pending.')
+            return
+        with self.pose_lock:
+            x, y = self.drone_x, self.drone_y
+            start_yaw = getattr(self, 'drone_yaw', 0.0)
+
+        self.rotation_in_place = True
+        self.publish_status('OBSERVE: Active 360° RGB-D survivor scan')
+        self.get_logger().info(
+            f'🔄 [JEV] Starting {self.scan_headings}-view 360° camera scan at ({x:.2f}, {y:.2f})')
+        try:
+            # The arrival heading is the first view. Visit the remaining evenly
+            # spaced headings; 5 views overlap the stereo camera's 83° HFOV.
+            for step in range(1, self.scan_headings):
+                if self.return_requested or not rclpy.ok():
+                    break
+                yaw = start_yaw + (2.0 * math.pi * step / self.scan_headings)
+                self._act_navigate(
+                    x, y, target_yaw=yaw, ignore_blocked=True)
+                deadline = time.time() + self.scan_goal_timeout_s
+                while self.is_acting and time.time() < deadline and rclpy.ok():
+                    time.sleep(0.10)
+                if self.is_acting:
+                    self.cancel_current_action()
+                # Three or more independent front RGB-D frames arrive here.
+                time.sleep(self.scan_dwell_s)
+        finally:
+            self.rotation_in_place = False
+            self.route = []
+            with self.pose_lock:
+                scan_position = (self.drone_x, self.drone_y)
+            if not self.visual_scan_locations or math.hypot(
+                    scan_position[0] - self.visual_scan_locations[-1][0],
+                    scan_position[1] - self.visual_scan_locations[-1][1]) > 0.25:
+                self.visual_scan_locations.append(scan_position)
+            self.get_logger().info('✅ [JEV] 360° RGB-D scan complete.')
+
+    def _goal_response_cb(self, future, generation):
         handle = future.result()
+        if generation != self.goal_generation:
+            if handle.accepted:
+                handle.cancel_goal_async().add_done_callback(self._cancel_done)
+            else:
+                self.cancel_pending = False
+            return
         if not handle.accepted:
             self.get_logger().warning('[JEV] ACT FAILED: Nav2 rejected the goal.')
             self.goal_status = "REJECTED"
@@ -230,9 +524,13 @@ class JevDecisionLayer(Node):
             return
         self.active_goal_handle = handle
         res_future = handle.get_result_async()
-        res_future.add_done_callback(self._goal_result_cb)
+        res_future.add_done_callback(lambda result: self._goal_result_cb(result, generation))
 
-    def _goal_result_cb(self, future):
+    def _goal_result_cb(self, future, generation):
+        if generation != self.goal_generation:
+            if generation == self.goal_generation - 1:
+                self.cancel_pending = False
+            return
         res = future.result()
         if res.status == GoalStatus.STATUS_SUCCEEDED:
             self.goal_status = "SUCCEEDED"
@@ -241,17 +539,27 @@ class JevDecisionLayer(Node):
         self.is_acting = False
 
     def cancel_current_action(self):
-        if self.is_acting and self.active_goal_handle:
-            self.get_logger().info('[JEV] Canceling current action...')
-            self.active_goal_handle.cancel_goal_async()
-            time.sleep(0.5)
+        if not self.is_acting:
+            return
+        self.goal_generation += 1
+        self.cancel_pending = True
+        if self.active_goal_handle:
+            self.active_goal_handle.cancel_goal_async().add_done_callback(self._cancel_done)
+            self.active_goal_handle = None
         self.is_acting = False
+
+    def _cancel_done(self, future):
+        try:
+            response = future.result()
+            self.cancel_pending = response.return_code not in (0, 3)
+        except Exception as exc:
+            self.get_logger().error(f'Navigation cancellation failed: {exc}')
 
     def jev_core_loop(self):
         self.get_logger().info('[JEV] Waiting for ROS 2 Subsystems (Nav2, Map, Pose)...')
         while not self.nav_client.wait_for_server(timeout_sec=1.0): pass
         while self.grid is None: time.sleep(0.5)
-        
+
         self.get_logger().info('[JEV] Subsystems Online. Activating JEV Core Loop.')
 
         # Wait for drone to complete takeoff & reach cruising altitude
@@ -276,7 +584,9 @@ class JevDecisionLayer(Node):
 
         while rclpy.ok():
             time.sleep(0.8)
-            
+            if self.cancel_pending:
+                continue
+
             # --- 1. OBSERVE ---
             with self.pose_lock:
                 pos = (self.drone_x, self.drone_y)
@@ -286,18 +596,62 @@ class JevDecisionLayer(Node):
             self.memory['frontiers'] = frontiers
             self.memory['position'] = pos
             self.publish_status(f"OBSERVE: Frontiers={len(frontiers)} | Cov={cov:.1f}%")
-            
+
             self.get_logger().info(f'\n🧠 [JEV] --- COGNITIVE LOOP ---')
             self.get_logger().info(f'🧠 [JEV] OBSERVE: Pos=({pos[0]:.2f}, {pos[1]:.2f}), Coverage={cov:.1f}%, Frontiers={len(frontiers)}')
-            
+
+            # An appearance/geometric anomaly farther than 2m is an approach
+            # cue, not a survivor. Move to a collision-checked stand-off pose so
+            # RGB-D can classify it at close range before mapping it.
+            inspection = self._next_inspection()
+            if inspection is not None and not self.return_requested:
+                tx, ty, key, requested_at = inspection
+                if time.time() - requested_at < 20.0:
+                    inspect_goal = self._inspection_goal(tx, ty)
+                    if inspect_goal is not None:
+                        gx, gy = inspect_goal
+                        self.publish_status(
+                            f"INSPECT: Approaching candidate ({tx:+.2f}, {ty:+.2f}) before classification")
+                        self.get_logger().info(
+                            f'🔎 [JEV] Candidate requires close verification; navigating to '
+                            f'({gx:+.2f}, {gy:+.2f}), object=({tx:+.2f}, {ty:+.2f}).')
+                        self._act_navigate(gx, gy, face_target=(tx, ty))
+                        started = time.time()
+                        while self.is_acting and rclpy.ok() and not self.return_requested and time.time() - started < 35.0:
+                            time.sleep(0.25)
+                            with self.pose_lock:
+                                current = (self.drone_x, self.drone_y)
+                        if self.is_acting:
+                            self.cancel_current_action()
+                        # Hold position briefly for independent RGB-D frames.
+                        time.sleep(1.0)
+                        self.inspection_cooldowns[key] = time.time() + 20.0
+                        continue
+                    self.inspection_cooldowns[key] = time.time() + 8.0
+
             # --- 2. QUESTION ---
-            # Strictly require >= 95.0% arena exploration before returning (do NOT stop just because survivors are found!)
-            return_needed = self.return_requested or (cov >= 95.0) or (cov >= 94.0 and len(frontiers) == 0)
-            self.publish_status(f"QUESTION: Checking Return Condition (Cov: {cov:.1f}% / 95.0%)")
-            
+            # Strictly require touring both West (X < -1.5m) and East (X > 1.5m) sectors of the compound,
+            # plus >= 95.0% arena exploration before returning to base (ensuring all rooms are inspected)
+            has_visited_east = any(vx > 1.5 for vx, vy in self.memory['visited_locations'])
+            has_visited_west = any(vx < -1.5 for vx, vy in self.memory['visited_locations'])
+            sectors_toured = has_visited_east and has_visited_west
+
+            coverage_complete = sectors_toured and (
+                cov >= 95.0 or (cov >= 92.0 and len(frontiers) == 0))
+            survivor_goal_met = (self.expected_survivors == 0 or
+                                 self.survivor_count >= self.expected_survivors)
+            # LiDAR coverage is not visual coverage.  Do not end an autonomous
+            # rescue mission merely because walls were mapped through doorways.
+            return_needed = self.return_requested or (
+                coverage_complete and survivor_goal_met)
+            self.publish_status(
+                f"QUESTION: Cov={cov:.1f}% | Survivors="
+                f"{self.survivor_count}/{self.expected_survivors or '?'} | "
+                f"Toured W={has_visited_west}/E={has_visited_east}")
+
             if return_needed:
-                self.get_logger().info(f'🎯 [JEV] DECIDE: Return to Base triggered (Coverage={cov:.1f}%, Survivors={self.survivor_count}/6, Manual={self.return_requested}).')
-                
+                self.get_logger().info(f'🎯 [JEV] DECIDE: Return to Base triggered (Coverage={cov:.1f}%, Confirmed Survivors={self.survivor_count}, Manual={self.return_requested}).')
+
                 # Step 1: Fly safely through the maze corridors to South Gate opening
                 self.publish_status("ACT: Returning to Base — Navigating South Gate (-5.80, -7.20)")
                 self.get_logger().info('🎯 [JEV] ACT: Step 1/2 — Navigating to South Gate opening (-5.80, -7.20)...')
@@ -339,9 +693,29 @@ class JevDecisionLayer(Node):
             # --- 3. THINK ---
             self.publish_status("THINK: Evaluating Frontier Heuristics & Obstacle Safety")
             best_action = None
-            if len(frontiers) > 0:
+
+            # Once LiDAR mapping is effectively complete, deliberately fill
+            # gaps in camera viewpoint coverage until the expected survivor
+            # count is reached.  This prevents the observed four-person stall.
+            if coverage_complete and not survivor_goal_met:
+                recovery_goal = self.find_visual_recovery_goal()
+                if recovery_goal is not None:
+                    rx, ry = recovery_goal
+                    self.publish_status(
+                        f"VISUAL RECOVERY: {self.survivor_count}/"
+                        f"{self.expected_survivors} confirmed; scanning unseen viewpoint")
+                    self.get_logger().info(
+                        f'👁️ [JEV] LiDAR coverage complete but only '
+                        f'{self.survivor_count}/{self.expected_survivors} survivors confirmed; '
+                        f'camera-recovery waypoint=({rx:+.2f}, {ry:+.2f}).')
+                    best_action = {'x': rx, 'y': ry, 'sz': 0}
+
+            if best_action is None and len(frontiers) > 0:
                 valid_options = []
                 for fx, fy, sz in frontiers:
+                    if any(expiry > time.monotonic() and math.hypot(fx-bx, fy-by) < 1.0
+                           for bx, by, expiry in self.blocked_targets):
+                        continue
                     dist = math.hypot(fx - pos[0], fy - pos[1])
                     # Skip frontiers immediately under the drone footprint (< 0.35m)
                     if dist < 0.35:
@@ -349,39 +723,61 @@ class JevDecisionLayer(Node):
 
                     # Soft penalty for areas with recent action failures
                     fails = sum(1 for gx, gy in self.memory['failed_actions'] if math.hypot(fx-gx, fy-gy) < 1.0)
-                    
+
                     # Soft penalty for areas already visited
                     visits = sum(1 for vx, vy in self.memory['visited_locations'] if math.hypot(fx-vx, fy-vy) < 1.0)
 
-                    # Multi-objective heuristic score: distance, cluster size, failure & visit counts
-                    score = dist - (0.18 * sz) + (fails * 8.0) + (visits * 12.0)
+                    # Sector balancing bonus: strongly prioritize unvisited side of compound
+                    sector_bonus = 0.0
+                    if not has_visited_east and fx > 0.8:
+                        sector_bonus = -6.0
+                    elif not has_visited_west and fx < -0.8:
+                        sector_bonus = -6.0
+
+                    # Locality hysteresis / neighborhood commitment bonus:
+                    # Prioritize finishing local sectors (< 3.2m) and penalize cross-arena jumps (> 6.0m)
+                    locality_bonus = -3.5 if dist < 3.2 else (3.0 if dist > 6.0 else 0.0)
+
+                    # Multi-objective heuristic score: distance, cluster size, locality, sector, failure & visit counts
+                    score = dist - (0.18 * sz) + locality_bonus + sector_bonus + (fails * 8.0) + (visits * 12.0)
                     valid_options.append({'x': fx, 'y': fy, 'score': score, 'sz': sz})
-                
+
                 if valid_options:
                     valid_options.sort(key=lambda x: x['score'])
                     best_action = valid_options[0]
                     self.get_logger().info(f'🧠 [JEV] THINK: Selected optimal frontier at ({best_action["x"]:.2f}, {best_action["y"]:.2f}) [score={best_action["score"]:.2f}, size={best_action["sz"]}].')
-            
+
             if best_action is None:
-                # Exploratory wander behavior
-                angle = (time.time() % (2 * math.pi))
-                nx = float(np.clip(pos[0] + 1.5 * math.cos(angle), -6.2, 6.2))
-                ny = float(np.clip(pos[1] + 1.5 * math.sin(angle), -6.2, 6.2))
-                self.get_logger().info(f'🧠 [JEV] THINK: No frontiers nearby. Performing exploratory wander to ({nx:.2f}, {ny:.2f}).')
-                best_action = {'x': nx, 'y': ny, 'sz': 0}
+                def available(tx, ty):
+                    return not any(expiry > time.monotonic() and math.hypot(tx-bx, ty-by) < 1.0
+                                   for bx, by, expiry in self.blocked_targets)
+                # If East or West sector not toured yet, navigate directly to corridor transit hub to inspect rooms
+                if not has_visited_east and available(3.40, 0.0):
+                    self.get_logger().info('🧠 [JEV] THINK: Prioritizing East Corridor sector transit (X=+3.40, Y=0.0) to inspect eastern rooms...')
+                    best_action = {'x': 3.40, 'y': 0.0, 'sz': 100}
+                elif not has_visited_west and available(-3.40, 0.0):
+                    self.get_logger().info('🧠 [JEV] THINK: Prioritizing West Corridor sector transit (X=-3.40, Y=0.0)...')
+                    best_action = {'x': -3.40, 'y': 0.0, 'sz': 100}
+                else:
+                    # Exploratory wander behavior
+                    angle = (time.time() % (2 * math.pi))
+                    nx = float(np.clip(pos[0] + 1.5 * math.cos(angle), -6.2, 6.2))
+                    ny = float(np.clip(pos[1] + 1.5 * math.sin(angle), -6.2, 6.2))
+                    self.get_logger().info(f'🧠 [JEV] THINK: No frontiers nearby. Performing exploratory wander to ({nx:.2f}, {ny:.2f}).')
+                    best_action = {'x': nx, 'y': ny, 'sz': 0}
 
             # --- 4. DECIDE ---
             target_x, target_y = best_action['x'], best_action['y']
             self.publish_status(f"DECIDE: Selected target waypoint ({target_x:.2f}, {target_y:.2f})")
             self.get_logger().info(f'🧠 [JEV] DECIDE: Navigating to ({target_x:.2f}, {target_y:.2f}).')
-            
+
             # --- 5. ACT ---
             self.publish_status(f"ACT: Navigating corridor to ({target_x:.2f}, {target_y:.2f})")
             self.memory['expected_outcome'] = (target_x, target_y)
             self._act_navigate(target_x, target_y)
-            
+
             act_start_time = time.time()
-            last_dist = math.hypot(target_x - pos[0], target_y - pos[1])
+            progress_pos = pos
             stuck_time = 0.0
 
             # Wait for action to complete or timeout
@@ -395,39 +791,42 @@ class JevDecisionLayer(Node):
                 with self.pose_lock:
                     cur_pos = (self.drone_x, self.drone_y)
                 dist = math.hypot(target_x - cur_pos[0], target_y - cur_pos[1])
-                
+
                 # Check progress
-                if abs(dist - last_dist) < 0.08:
+                if math.hypot(cur_pos[0]-progress_pos[0], cur_pos[1]-progress_pos[1]) < 0.12:
                     stuck_time += 0.4
                 else:
                     stuck_time = 0.0
-                    last_dist = dist
-                    
+                    progress_pos = cur_pos
+
                 if dist < 0.40:
                     self.get_logger().info(f'🧠 [JEV] VERIFY: Reached frontier proximity ({dist:.2f}m). Smooth transition.')
                     self.cancel_current_action()
                     self.goal_status = "SUCCEEDED"
                     break
-                    
-                if stuck_time > 12.0 or (time.time() - act_start_time) > 40.0:
-                    self.get_logger().warning(f'🧠 [JEV] VERIFY: Action taking too long ({stuck_time:.1f}s stalled). Aborting.')
+
+                # Rapid evasive abort: if progress stalls for 1.6s or total action exceeds 25s, replan immediately
+                if stuck_time >= 1.6 or (time.time() - act_start_time) > 25.0:
+                    self.blocked_targets.append((target_x, target_y, time.monotonic() + 30.0))
+                    self.get_logger().warning(f'⚡ [JEV] Stalled / Blocked path ahead ({stuck_time:.1f}s stalled). Rapid evasive reroute!')
                     self.cancel_current_action()
-                    self.goal_status = "TIMEOUT"
+                    self.goal_status = "BLOCKED"
                     break
 
             # --- 6. VERIFY & 7. REASSESS ---
             self.publish_status(f"VERIFY: Waypoint execution outcome: {self.goal_status}")
             self.get_logger().info(f'🧠 [JEV] VERIFY: Action finished with status: {self.goal_status}')
-            
+
             if self.goal_status == "SUCCEEDED":
                 self.get_logger().info(f'🧠 [JEV] REASSESS: Action succeeded. Updating visited memory.')
                 self.memory['visited_locations'].append((target_x, target_y))
                 consecutive_failures = 0
+                self._scan_360_at_current_position()
             else:
                 self.get_logger().info(f'🧠 [JEV] REASSESS: Action failed. Updating failed memory. Soft penalty applied.')
                 self.memory['failed_actions'].append((target_x, target_y))
                 consecutive_failures += 1
-                
+
                 if consecutive_failures >= 3:
                     if self.memory['visited_locations']:
                         idx = max(0, len(self.memory['visited_locations']) - 4)

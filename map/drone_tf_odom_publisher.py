@@ -83,7 +83,30 @@ class DroneTfOdomPublisher(Node):
         static_bf.transform.translation.z = -0.05
         static_bf.transform.rotation.w = 1.0
 
-        self.tf_static_broadcaster.sendTransform([static_lidar, static_bf])
+        # Broadcast static base_link -> camera_link (imx219_stereo RGB-D position)
+        static_cam = TransformStamped()
+        static_cam.header.stamp = now_msg
+        static_cam.header.frame_id = 'base_link'
+        static_cam.child_frame_id = 'camera_link'
+        static_cam.transform.translation.x = 0.17
+        static_cam.transform.translation.y = 0.0
+        static_cam.transform.translation.z = 0.025
+        static_cam.transform.rotation.w = 1.0
+
+        # Broadcast static camera_link -> camera_optical_frame (standard ROS REP-103 optical convention)
+        static_cam_opt = TransformStamped()
+        static_cam_opt.header.stamp = now_msg
+        static_cam_opt.header.frame_id = 'camera_link'
+        static_cam_opt.child_frame_id = 'camera_optical_frame'
+        static_cam_opt.transform.translation.x = 0.0
+        static_cam_opt.transform.translation.y = 0.0
+        static_cam_opt.transform.translation.z = 0.0
+        static_cam_opt.transform.rotation.x = 0.5
+        static_cam_opt.transform.rotation.y = -0.5
+        static_cam_opt.transform.rotation.z = 0.5
+        static_cam_opt.transform.rotation.w = -0.5
+
+        self.tf_static_broadcaster.sendTransform([static_lidar, static_bf, static_cam, static_cam_opt])
 
         # Subscriptions
         self.sub_pose = self.create_subscription(

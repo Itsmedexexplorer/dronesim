@@ -48,7 +48,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QSplitter, QFileDialog, QGraphicsDropShadowEffect,
     QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, QRect, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, QRect, pyqtSignal, QSize
 from PyQt5.QtGui import (
     QImage, QPixmap, QPainter, QColor, QPen, QBrush, QFont,
     QPolygonF, QPainterPath
@@ -69,10 +69,12 @@ from cv_bridge import CvBridge
 # DESIGN TOKENS & STYLESHEETS (APPLE VISION PRO AESTHETIC)
 # ─────────────────────────────────────────────────────────────────────────────
 SPATIAL_BG = "#07080c"
-GLASS_BG = "rgba(15, 23, 42, 0.74)"
-GLASS_BORDER = "1px solid rgba(255, 255, 255, 0.09)"
+SPATIAL_FONT = "Noto Sans"          # metrically close, installed SF-style fallback
+SPATIAL_MONO = "DejaVu Sans Mono"
+GLASS_BG = "rgba(24, 26, 34, 0.82)"
+GLASS_BORDER = "1px solid rgba(255, 255, 255, 0.13)"
 GLASS_BORDER_ACTIVE = "1px solid rgba(56, 189, 248, 0.40)"
-GLASS_RADIUS = "16px"
+GLASS_RADIUS = "22px"
 
 MAIN_STYLESHEET = f"""
 QMainWindow {{
@@ -80,7 +82,16 @@ QMainWindow {{
 }}
 QWidget {{
     color: #f8fafc;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+    font-family: "SF Pro Display", "SF Pro Text", "Noto Sans", "Segoe UI", sans-serif;
+    font-size: 10pt;
+    selection-background-color: rgba(10, 132, 255, 0.55);
+}}
+QToolTip {{
+    color: #ffffff;
+    background-color: rgba(38, 38, 42, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    padding: 6px 9px;
 }}
 QScrollArea {{
     background: transparent;
@@ -155,6 +166,10 @@ class GcsRosBackend(Node):
         self.drone_yaw = 1.5708
         self.climb_rate = 0.0
         self.speed = 0.0
+        self.pose_speed = 0.0
+        self.last_pose_t = None
+        self.last_px = None
+        self.last_py = None
 
         self.cmd_vx = 0.0
         self.cmd_vy = 0.0
@@ -241,7 +256,20 @@ class GcsRosBackend(Node):
         py = msg.pose.position.y
         pz = msg.pose.position.z
 
+        now = time.time()
         with self.lock:
+            if self.last_pose_t is not None and self.last_px is not None:
+                dt = now - self.last_pose_t
+                if 0.005 <= dt <= 0.5:
+                    d_pos = math.hypot(px - self.last_px, py - self.last_py)
+                    instant_spd = d_pos / dt
+                    self.pose_speed = 0.30 * instant_spd + 0.70 * self.pose_speed
+                elif dt > 0.5:
+                    self.pose_speed = 0.0
+            self.last_pose_t = now
+            self.last_px = px
+            self.last_py = py
+
             self.drone_x = px
             self.drone_y = py
             self.drone_z = pz
@@ -250,7 +278,7 @@ class GcsRosBackend(Node):
             self.drone_yaw = yaw
 
             if self.start_time is None and self.drone_z > 0.35:
-                self.start_time = time.time()
+                self.start_time = now
 
             if len(self.flight_trail) == 0 or math.hypot(px - self.flight_trail[-1][0], py - self.flight_trail[-1][1]) > 0.15:
                 self.flight_trail.append((px, py))
@@ -258,7 +286,11 @@ class GcsRosBackend(Node):
     def cb_vel(self, msg: TwistStamped):
         with self.lock:
             self.climb_rate = msg.twist.linear.z
-            self.speed = math.hypot(msg.twist.linear.x, msg.twist.linear.y)
+            v_spd = math.hypot(msg.twist.linear.x, msg.twist.linear.y)
+            if v_spd > 0.01:
+                self.speed = v_spd
+            else:
+                self.speed = self.pose_speed
 
     def cb_cmd(self, msg: Twist):
         with self.lock:
@@ -320,9 +352,11 @@ class GcsRosBackend(Node):
     def cb_surv_mrk(self, msg: MarkerArray):
         survivors = []
         for m in msg.markers:
-            if m.ns == 'survivors' and m.id % 5 == 1:
+            # Type 1 is body cube
+            if m.ns == 'survivors' and (m.id % 10 == 1 or m.id % 5 == 1):
+                sid = (m.id // 10) if (m.id >= 10) else ((m.id - 1) // 5 + 1)
                 survivors.append({
-                    'id': (m.id - 1) // 5 + 1,
+                    'id': sid,
                     'x': m.pose.position.x,
                     'y': m.pose.position.y
                 })
@@ -353,6 +387,156 @@ class GcsRosBackend(Node):
             self.mission_complete = False
             self.completion_time = None
             self.start_time = time.time()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APPLE SPATIAL CAMERA VIEWER WIDGET (ZERO-INFLATION & FLICKER-FREE)
+# ─────────────────────────────────────────────────────────────────────────────
+class CameraViewerWidget(QWidget):
+    """
+    Apple Vision Pro Inspired Hardware-Accelerated Camera Viewer.
+    - Zero layout inflation: paints directly in paintEvent with QPainter.
+    - Anti-flicker double-buffered rendering with SmoothPixmapTransform.
+    - Aspect ratio preserved via centered letterbox/pillarbox geometry.
+    - Standby / Touchdown Verified HUD card dynamically drawn in vector graphics.
+    - Hero HUD pill overlay in Camera Focus mode.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(180, 110)
+        self._pixmap = None
+        self._is_standby = False
+        self._standby_info = {}
+        self._hero_hud_data = None
+
+    def sizeHint(self):
+        return QSize(340, 195)
+
+    def minimumSizeHint(self):
+        return QSize(180, 110)
+
+    def set_pixmap(self, pixmap: QPixmap, hero_hud_data=None):
+        self._is_standby = False
+        self._pixmap = pixmap
+        self._hero_hud_data = hero_hud_data
+        self.update()
+
+    def set_standby(self, info: dict):
+        self._is_standby = True
+        self._standby_info = info
+        self._pixmap = None
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        w = self.width()
+        h = self.height()
+
+        # Deep OLED Canvas
+        painter.fillRect(0, 0, w, h, QColor(4, 5, 8))
+
+        if self._is_standby:
+            self._render_standby(painter, w, h)
+            return
+
+        if self._pixmap is None or self._pixmap.isNull():
+            # Elegant Apple-style placeholder
+            painter.setPen(QColor(100, 116, 139))
+            painter.setFont(QFont(SPATIAL_FONT, 9, QFont.DemiBold))
+            painter.drawText(QRect(0, 0, w, h), Qt.AlignCenter, "WAITING FOR CAMERA STREAM...")
+            return
+
+        pw = self._pixmap.width()
+        ph = self._pixmap.height()
+        if pw <= 0 or ph <= 0:
+            return
+
+        scale = min(w / float(pw), h / float(ph))
+        dw = int(pw * scale)
+        dh = int(ph * scale)
+        dx = (w - dw) // 2
+        dy = (h - dh) // 2
+
+        target_rect = QRect(dx, dy, dw, dh)
+        painter.drawPixmap(target_rect, self._pixmap)
+
+        # Subtle hairline frame border
+        painter.setPen(QPen(QColor(255, 255, 255, 25), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(target_rect)
+
+        # In Camera Hero mode, render vector-sharp telemetry HUD pill at the top
+        if self._hero_hud_data and w > 420:
+            self._render_hero_hud(painter, dx, dy, dw, dh)
+
+    def _render_hero_hud(self, painter: QPainter, fx, fy, fw, fh):
+        hud = self._hero_hud_data
+        alt = hud.get('alt', 0.0)
+        vz = hud.get('vz', 0.0)
+        spd = hud.get('spd', 0.0)
+        hdg = hud.get('hdg', 0)
+
+        hud_text = f"ALT: {alt:4.2f}m   Vz: {vz:+4.2f}m/s   SPD: {spd:4.2f}m/s   HDG: {hdg:03d}°   🛡️ EIS: ACTIVE"
+
+        pill_w = min(460, fw - 40)
+        pill_h = 28
+        pill_x = fx + (fw - pill_w) // 2
+        pill_y = fy + 10
+
+        # Frosted glass capsule
+        painter.setPen(QPen(QColor(56, 189, 248, 120), 1))
+        painter.setBrush(QBrush(QColor(15, 23, 42, 210)))
+        painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 14, 14)
+
+        painter.setPen(QColor(248, 250, 252))
+        painter.setFont(QFont(SPATIAL_MONO, 8, QFont.Bold))
+        painter.drawText(QRect(pill_x, pill_y, pill_w, pill_h), Qt.AlignCenter, hud_text)
+
+    def _render_standby(self, painter: QPainter, w, h):
+        cov = self._standby_info.get('cov', 100.0)
+        surv = self._standby_info.get('surv', 6)
+
+        card_w = min(420, max(260, w - 24))
+        card_h = min(170, max(120, h - 20))
+        cx = (w - card_w) // 2
+        cy = (h - card_h) // 2
+
+        # Frosted background card
+        painter.setPen(QPen(QColor(255, 255, 255, 25), 1))
+        painter.setBrush(QBrush(QColor(14, 18, 28, 230)))
+        painter.drawRoundedRect(cx, cy, card_w, card_h, 16, 16)
+
+        # Status Pill: CAMERA STANDBY
+        pill_w = min(280, card_w - 40)
+        pill_h = 24
+        px = cx + (card_w - pill_w) // 2
+        py = cy + 14
+        painter.setPen(QPen(QColor(239, 68, 68, 140), 1))
+        painter.setBrush(QBrush(QColor(69, 10, 10, 180)))
+        painter.drawRoundedRect(px, py, pill_w, pill_h, 12, 12)
+
+        painter.setPen(QColor(254, 202, 202))
+        painter.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
+        painter.drawText(QRect(px, py, pill_w, pill_h), Qt.AlignCenter, "🔴 STANDBY — SENSORS POWERED DOWN")
+
+        # Title: MISSION ACCOMPLISHED
+        painter.setPen(QColor(52, 211, 153))
+        painter.setFont(QFont(SPATIAL_FONT, 12, QFont.Bold))
+        painter.drawText(QRect(cx, cy + 44, card_w, 26), Qt.AlignCenter, "🏆 MISSION ACCOMPLISHED")
+
+        # Stats
+        painter.setFont(QFont(SPATIAL_MONO, 9, QFont.Bold))
+        painter.setPen(QColor(226, 232, 240))
+        painter.drawText(QRect(cx, cy + 76, card_w, 22), Qt.AlignCenter, f"Coverage: {cov:.1f}%  |  Survivors: {surv}/6")
+
+        painter.setFont(QFont(SPATIAL_FONT, 8))
+        painter.setPen(QColor(148, 163, 184))
+        painter.drawText(QRect(cx, cy + 102, card_w, 20), Qt.AlignCenter, "Touchdown Verified on Base Helipad")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -470,21 +654,21 @@ class ArenaMapWidget(QWidget):
             painter.setPen(QPen(QColor(30, 41, 59), 2))
             painter.drawLine(0, 105, w, 105)
 
-            painter.setFont(QFont("Arial", 16, QFont.Bold))
+            painter.setFont(QFont(SPATIAL_FONT, 16, QFont.Bold))
             painter.setPen(QPen(QColor(56, 189, 248)))
             painter.drawText(30, 42, "NIDAR SPATIAL OS — 2D SLAM TACTICAL MAP")
 
-            painter.setFont(QFont("Arial", 11))
+            painter.setFont(QFont(SPATIAL_FONT, 11))
             painter.setPen(QPen(QColor(226, 232, 240)))
             cov_val = info.get('cov', 0.0) if info else 0.0
             time_val = info.get('time', 'N/A') if info else 'N/A'
             surv_val = info.get('surv', 0) if info else 0
-            painter.drawText(30, 78, f"Explored: {cov_val:.1f}%   |   Mission Time: {time_val}   |   Confirmed Survivors: {surv_val} / 6")
+            painter.drawText(30, 78, f"Explored: {cov_val:.1f}%   |   Mission Time: {time_val}   |   Confirmed Survivors: {surv_val}")
 
             if info and info.get('survivors'):
-                painter.setFont(QFont("Arial", 9))
+                painter.setFont(QFont(SPATIAL_FONT, 9))
                 painter.setPen(QPen(QColor(251, 146, 60)))
-                surv_lines = [f"#{s.get('id', i+1)}: ({s.get('x', s.get('map_x', 0.0)):+.2f}, {s.get('y', s.get('map_y', 0.0)):+.2f})" for i, s in enumerate(info['survivors'][:6])]
+                surv_lines = [f"#{s.get('id', i+1)}: ({s.get('x', s.get('map_x', 0.0)):+.2f}, {s.get('y', s.get('map_y', 0.0)):+.2f})" for i, s in enumerate(info['survivors'])]
                 painter.drawText(w - 440, 40, "Fixed Survivor Locations:")
                 painter.drawText(w - 440, 64, "  " + "   ".join(surv_lines[:3]))
                 if len(surv_lines) > 3:
@@ -519,7 +703,7 @@ class ArenaMapWidget(QWidget):
         painter.drawRoundedRect(QRectF(hx - pad_size/2, hy - pad_size/2, pad_size, pad_size), 8, 8)
         painter.drawEllipse(QPointF(hx, hy), pad_size * 0.38, pad_size * 0.38)
 
-        painter.setFont(QFont("Arial", 11, QFont.Bold))
+        painter.setFont(QFont(SPATIAL_FONT, 11, QFont.Bold))
         painter.setPen(QPen(QColor(16, 185, 129)))
         painter.drawText(QRectF(hx - 15, hy - 15, 30, 30), Qt.AlignCenter, "H")
 
@@ -566,16 +750,16 @@ class ArenaMapWidget(QWidget):
             if w >= 440 or is_export:
                 # Spatial Pill Tag: SURVIVOR #ID [FIXED]
                 tag_text = f"SURVIVOR #{sid} [FIXED]"
-                painter.setFont(QFont("Arial", 8, QFont.Bold))
+                painter.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
                 painter.setPen(QPen(QColor(255, 255, 255)))
                 painter.drawText(int(sx + 12), int(sy - 2), tag_text)
 
                 coord_text = f"({sx_val:+.2f}, {sy_val:+.2f})"
-                painter.setFont(QFont("Monospace", 7))
+                painter.setFont(QFont(SPATIAL_MONO, 7))
                 painter.setPen(QPen(QColor(56, 189, 248)))
                 painter.drawText(int(sx + 12), int(sy + 10), coord_text)
             else:
-                painter.setFont(QFont("Arial", 7, QFont.Bold))
+                painter.setFont(QFont(SPATIAL_FONT, 7, QFont.Bold))
                 painter.setPen(QPen(QColor(255, 255, 255)))
                 painter.drawText(int(sx + 8), int(sy + 4), f"S#{sid}")
 
@@ -623,7 +807,7 @@ class ArenaMapWidget(QWidget):
                 painter.setBrush(QBrush(col))
                 painter.drawRoundedRect(QRectF(24, iy - 6, 9, 9), 2, 2)
                 painter.setPen(QPen(QColor(203, 213, 225)))
-                painter.setFont(QFont("Arial", 8))
+                painter.setFont(QFont(SPATIAL_FONT, 8))
                 painter.drawText(40, iy + 2, lbl)
 
         # Scale Bar
@@ -634,13 +818,13 @@ class ArenaMapWidget(QWidget):
             painter.drawLine(bx, by, bx + bar_len, by)
             painter.drawLine(bx, by - 3, bx, by + 3)
             painter.drawLine(bx + bar_len, by - 3, bx + bar_len, by + 3)
-            painter.setFont(QFont("Arial", 7, QFont.Bold))
+            painter.setFont(QFont(SPATIAL_FONT, 7, QFont.Bold))
             painter.setPen(QPen(QColor(148, 163, 184)))
             painter.drawText(bx + 4, by - 5, "2.0 m")
 
             if not is_export and self.cursor_world:
                 cwx, cwy = self.cursor_world
-                painter.setFont(QFont("Monospace", 8))
+                painter.setFont(QFont(SPATIAL_MONO, 8))
                 painter.setPen(QPen(QColor(100, 116, 139)))
                 painter.drawText(bx + bar_len + 16, by + 2, f"CURSOR: X={cwx:+5.2f}m, Y={cwy:+5.2f}m")
 
@@ -800,17 +984,17 @@ class SpatialSurvivorCard(QFrame):
 
         # 1. SURVIVOR #{id}
         lbl_title = QLabel(f"SURVIVOR #{sid}")
-        lbl_title.setFont(QFont("Arial", 11, QFont.Bold))
+        lbl_title.setFont(QFont(SPATIAL_FONT, 11, QFont.Bold))
         lbl_title.setStyleSheet("color: #f8fafc;")
         layout.addWidget(lbl_title)
 
         # 2. Status: CONFIRMED
         status_row = QHBoxLayout()
         lbl_st_lbl = QLabel("Status:")
-        lbl_st_lbl.setFont(QFont("Arial", 9))
+        lbl_st_lbl.setFont(QFont(SPATIAL_FONT, 9))
         lbl_st_lbl.setStyleSheet("color: #94a3b8;")
         lbl_status = QLabel("CONFIRMED")
-        lbl_status.setFont(QFont("Arial", 8, QFont.Bold))
+        lbl_status.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         lbl_status.setStyleSheet("""
             background-color: rgba(16, 185, 129, 0.16);
             color: #34d399;
@@ -825,20 +1009,20 @@ class SpatialSurvivorCard(QFrame):
 
         # Map Position Callout (Fixed Map Coordinates)
         lbl_pos = QLabel(f"Map position: fixed ({sx:+.2f}m, {sy:+.2f}m)")
-        lbl_pos.setFont(QFont("Monospace", 9))
+        lbl_pos.setFont(QFont(SPATIAL_MONO, 9))
         lbl_pos.setStyleSheet("color: #38bdf8;")
         layout.addWidget(lbl_pos)
 
         # Grid Sector Callout
         lbl_grid = QLabel(f"Grid: {grid}")
-        lbl_grid.setFont(QFont("Arial", 9))
+        lbl_grid.setFont(QFont(SPATIAL_FONT, 9))
         lbl_grid.setStyleSheet("color: #cbd5e1;")
         layout.addWidget(lbl_grid)
 
         # Confidence Bar
         conf_row = QHBoxLayout()
         lbl_conf = QLabel(f"Confidence: {conf}%")
-        lbl_conf.setFont(QFont("Arial", 9, QFont.Bold))
+        lbl_conf.setFont(QFont(SPATIAL_FONT, 9, QFont.Bold))
         lbl_conf.setStyleSheet("color: #34d399;")
 
         bar = QProgressBar()
@@ -889,7 +1073,7 @@ class SpatialJevWidget(QFrame):
 
         hdr_row = QHBoxLayout()
         lbl_title = QLabel("JEV COGNITIVE STATE MACHINE")
-        lbl_title.setFont(QFont("Arial", 8, QFont.Bold))
+        lbl_title.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         lbl_title.setStyleSheet("color: #38bdf8; letter-spacing: 1px;")
         hdr_row.addWidget(lbl_title)
         hdr_row.addStretch(1)
@@ -903,7 +1087,7 @@ class SpatialJevWidget(QFrame):
         for i, step in enumerate(self.STEPS):
             lbl = QLabel(step)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setFont(QFont("Arial", 8, QFont.Bold))
+            lbl.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
             lbl.setFixedHeight(26)
             self.set_pill_style(lbl, active=False)
             self.pill_labels[step] = lbl
@@ -911,7 +1095,7 @@ class SpatialJevWidget(QFrame):
 
             if i < len(self.STEPS) - 1:
                 arr = QLabel("→")
-                arr.setFont(QFont("Arial", 9))
+                arr.setFont(QFont(SPATIAL_FONT, 9))
                 arr.setStyleSheet("color: rgba(255, 255, 255, 0.25);")
                 self.pills_layout.addWidget(arr)
 
@@ -919,7 +1103,7 @@ class SpatialJevWidget(QFrame):
 
         # Executive Objective (Concise high-level goal, no chain-of-thought)
         self.lbl_objective = QLabel("Objective: Autonomous Frontier Exploration & Compound Mapping")
-        self.lbl_objective.setFont(QFont("Arial", 9))
+        self.lbl_objective.setFont(QFont(SPATIAL_FONT, 9))
         self.lbl_objective.setStyleSheet("color: #94a3b8;")
         vbox.addWidget(self.lbl_objective)
 
@@ -1018,15 +1202,15 @@ class NidarGcsWindow(QMainWindow):
         # Brand Badge with Pulsing LED
         brand_layout = QHBoxLayout()
         self.lbl_led = QLabel("●")
-        self.lbl_led.setFont(QFont("Arial", 12))
+        self.lbl_led.setFont(QFont(SPATIAL_FONT, 12))
         self.lbl_led.setStyleSheet("color: #10b981;")
 
         lbl_brand = QLabel("NIDAR SPATIAL")
-        lbl_brand.setFont(QFont("Arial", 12, QFont.Bold))
+        lbl_brand.setFont(QFont(SPATIAL_FONT, 12, QFont.Bold))
         lbl_brand.setStyleSheet("color: #f8fafc; letter-spacing: 0.5px;")
 
         self.lbl_flight_mode = QLabel("AUTONOMOUS")
-        self.lbl_flight_mode.setFont(QFont("Arial", 8, QFont.Bold))
+        self.lbl_flight_mode.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         self.lbl_flight_mode.setStyleSheet("""
             background-color: rgba(56, 189, 248, 0.15);
             color: #38bdf8;
@@ -1044,9 +1228,9 @@ class NidarGcsWindow(QMainWindow):
         # Central Stopwatch Timer
         timer_box = QHBoxLayout()
         lbl_timer_ic = QLabel("⏱")
-        lbl_timer_ic.setFont(QFont("Arial", 12))
+        lbl_timer_ic.setFont(QFont(SPATIAL_FONT, 12))
         self.lbl_big_timer = QLabel("00:00.0")
-        self.lbl_big_timer.setFont(QFont("Monospace", 16, QFont.Bold))
+        self.lbl_big_timer.setFont(QFont(SPATIAL_MONO, 16, QFont.Bold))
         self.lbl_big_timer.setStyleSheet("""
             color: #34d399;
             background-color: rgba(255, 255, 255, 0.05);
@@ -1062,7 +1246,7 @@ class NidarGcsWindow(QMainWindow):
         cov_box = QHBoxLayout()
         lbl_cov_ic = QLabel("🗺")
         self.lbl_cov_val = QLabel("0.0% Mapped")
-        self.lbl_cov_val.setFont(QFont("Arial", 11, QFont.Bold))
+        self.lbl_cov_val.setFont(QFont(SPATIAL_FONT, 11, QFont.Bold))
         self.lbl_cov_val.setStyleSheet("color: #38bdf8;")
 
         self.bar_cov = QProgressBar()
@@ -1087,8 +1271,8 @@ class NidarGcsWindow(QMainWindow):
         top_hb.addLayout(cov_box)
 
         # Survivor Tagged Count Pill
-        self.lbl_surv_pill = QLabel("👥 0 / 6 Survivors")
-        self.lbl_surv_pill.setFont(QFont("Arial", 10, QFont.Bold))
+        self.lbl_surv_pill = QLabel("👥 0 Survivors")
+        self.lbl_surv_pill.setFont(QFont(SPATIAL_FONT, 10, QFont.Bold))
         self.lbl_surv_pill.setStyleSheet("""
             color: #fb923c;
             background-color: rgba(249, 115, 22, 0.12);
@@ -1152,11 +1336,13 @@ class NidarGcsWindow(QMainWindow):
         """
 
         self.btn_download_map = QPushButton("💾 Export Map")
+        self.btn_download_map.setToolTip("Save a high-resolution mission map snapshot")
         self.btn_download_map.setStyleSheet(btn_style)
         self.btn_download_map.clicked.connect(self.on_download_map_clicked)
         top_hb.addWidget(self.btn_download_map)
 
         self.btn_relaunch = QPushButton("🚀 Relaunch")
+        self.btn_relaunch.setToolTip("Clear mission state and begin a new autonomous search")
         self.btn_relaunch.setStyleSheet("""
             QPushButton {
                 background-color: rgba(16, 185, 129, 0.18);
@@ -1175,6 +1361,7 @@ class NidarGcsWindow(QMainWindow):
         top_hb.addWidget(self.btn_relaunch)
 
         self.btn_land = QPushButton("🛬 Land / RTH")
+        self.btn_land.setToolTip("Abort exploration, return to the helipad, and land")
         self.btn_land.setStyleSheet("""
             QPushButton {
                 background-color: rgba(239, 68, 68, 0.16);
@@ -1189,7 +1376,7 @@ class NidarGcsWindow(QMainWindow):
                 background-color: rgba(239, 68, 68, 0.28);
             }
         """)
-        self.btn_land.clicked.connect(self.backend.send_land_cmd)
+        self.btn_land.clicked.connect(self.on_land_clicked)
         top_hb.addWidget(self.btn_land)
 
         root_vbox.addWidget(top_capsule)
@@ -1208,7 +1395,7 @@ class NidarGcsWindow(QMainWindow):
         left_vbox.setSpacing(10)
 
         lbl_telem_hdr = QLabel("FLIGHT TELEMETRY")
-        lbl_telem_hdr.setFont(QFont("Arial", 8, QFont.Bold))
+        lbl_telem_hdr.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         lbl_telem_hdr.setStyleSheet("color: #38bdf8; letter-spacing: 1px;")
         left_vbox.addWidget(lbl_telem_hdr)
 
@@ -1219,13 +1406,13 @@ class NidarGcsWindow(QMainWindow):
         alt_v.setContentsMargins(8, 6, 8, 6)
         alt_v.setSpacing(2)
         lbl_alt_sub = QLabel("ALTITUDE")
-        lbl_alt_sub.setFont(QFont("Arial", 7, QFont.Bold))
+        lbl_alt_sub.setFont(QFont(SPATIAL_FONT, 7, QFont.Bold))
         lbl_alt_sub.setStyleSheet("color: #94a3b8;")
         self.lbl_altitude = QLabel("0.00 m")
-        self.lbl_altitude.setFont(QFont("Monospace", 15, QFont.Bold))
+        self.lbl_altitude.setFont(QFont(SPATIAL_MONO, 15, QFont.Bold))
         self.lbl_altitude.setStyleSheet("color: #34d399;")
         self.lbl_climb = QLabel("Vz: +0.00 m/s  (Target: 1.50m)")
-        self.lbl_climb.setFont(QFont("Monospace", 8))
+        self.lbl_climb.setFont(QFont(SPATIAL_MONO, 8))
         self.lbl_climb.setStyleSheet("color: #94a3b8;")
         alt_v.addWidget(lbl_alt_sub)
         alt_v.addWidget(self.lbl_altitude)
@@ -1239,13 +1426,13 @@ class NidarGcsWindow(QMainWindow):
         hdg_v.setContentsMargins(8, 6, 8, 6)
         hdg_v.setSpacing(2)
         self.lbl_heading = QLabel("🧭 HDG: 090° [EAST]")
-        self.lbl_heading.setFont(QFont("Monospace", 10, QFont.Bold))
+        self.lbl_heading.setFont(QFont(SPATIAL_MONO, 10, QFont.Bold))
         self.lbl_heading.setStyleSheet("color: #fbbf24;")
         self.lbl_speed = QLabel("🚀 SPEED: 0.00 m/s")
-        self.lbl_speed.setFont(QFont("Monospace", 9))
+        self.lbl_speed.setFont(QFont(SPATIAL_MONO, 9))
         self.lbl_speed.setStyleSheet("color: #38bdf8;")
         self.lbl_coords = QLabel("📍 X: -5.80m, Y: -8.80m")
-        self.lbl_coords.setFont(QFont("Monospace", 9))
+        self.lbl_coords.setFont(QFont(SPATIAL_MONO, 9))
         self.lbl_coords.setStyleSheet("color: #cbd5e1;")
         hdg_v.addWidget(self.lbl_heading)
         hdg_v.addWidget(self.lbl_speed)
@@ -1254,7 +1441,7 @@ class NidarGcsWindow(QMainWindow):
 
         # 360° LiDAR Radar Scope
         lbl_radar_sub = QLabel("SPATIAL 360° LIDAR RADAR")
-        lbl_radar_sub.setFont(QFont("Arial", 8, QFont.Bold))
+        lbl_radar_sub.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         lbl_radar_sub.setStyleSheet("color: #38bdf8; letter-spacing: 0.5px;")
         left_vbox.addWidget(lbl_radar_sub)
         self.radar_widget = SpatialLidarRadarWidget()
@@ -1262,7 +1449,7 @@ class NidarGcsWindow(QMainWindow):
 
         # Rotor Dynamics
         lbl_prop_sub = QLabel("ROTOR DYNAMICS")
-        lbl_prop_sub.setFont(QFont("Arial", 8, QFont.Bold))
+        lbl_prop_sub.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         lbl_prop_sub.setStyleSheet("color: #38bdf8; letter-spacing: 0.5px;")
         left_vbox.addWidget(lbl_prop_sub)
         self.prop_widget = SpatialPropellerWidget()
@@ -1282,13 +1469,13 @@ class NidarGcsWindow(QMainWindow):
         # Hero Header Bar
         hero_hdr = QHBoxLayout()
         self.lbl_hero_title = QLabel("2D TACTICAL SLAM ARENA MAP")
-        self.lbl_hero_title.setFont(QFont("Arial", 9, QFont.Bold))
+        self.lbl_hero_title.setFont(QFont(SPATIAL_FONT, 9, QFont.Bold))
         self.lbl_hero_title.setStyleSheet("color: #38bdf8; letter-spacing: 0.8px;")
         hero_hdr.addWidget(self.lbl_hero_title)
         hero_hdr.addStretch(1)
 
         self.lbl_hero_badge = QLabel("MAP FOCUS")
-        self.lbl_hero_badge.setFont(QFont("Arial", 7, QFont.Bold))
+        self.lbl_hero_badge.setFont(QFont(SPATIAL_FONT, 7, QFont.Bold))
         self.lbl_hero_badge.setStyleSheet("""
             background-color: rgba(56, 189, 248, 0.15);
             color: #38bdf8;
@@ -1316,13 +1503,13 @@ class NidarGcsWindow(QMainWindow):
 
         right_hdr = QHBoxLayout()
         lbl_surv_hdr = QLabel("SURVIVOR INTEL")
-        lbl_surv_hdr.setFont(QFont("Arial", 8, QFont.Bold))
+        lbl_surv_hdr.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         lbl_surv_hdr.setStyleSheet("color: #fb923c; letter-spacing: 1px;")
         right_hdr.addWidget(lbl_surv_hdr)
         right_hdr.addStretch(1)
 
         self.lbl_surv_badge = QLabel("0 CONFIRMED")
-        self.lbl_surv_badge.setFont(QFont("Arial", 8, QFont.Bold))
+        self.lbl_surv_badge.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         self.lbl_surv_badge.setStyleSheet("color: #34d399;")
         right_hdr.addWidget(self.lbl_surv_badge)
         right_vbox.addLayout(right_hdr)
@@ -1337,7 +1524,7 @@ class NidarGcsWindow(QMainWindow):
 
         self.lbl_no_surv = QLabel("Scanning arena for human survivors...\\n\\nPersistent MAP-frame coordinates will anchor here upon multi-frame confirmation.")
         self.lbl_no_surv.setWordWrap(True)
-        self.lbl_no_surv.setFont(QFont("Arial", 9))
+        self.lbl_no_surv.setFont(QFont(SPATIAL_FONT, 9))
         self.lbl_no_surv.setStyleSheet("color: #64748b; padding: 12px;")
         self.surv_vbox.addWidget(self.lbl_no_surv)
         self.surv_vbox.addStretch(1)
@@ -1366,13 +1553,13 @@ class NidarGcsWindow(QMainWindow):
 
         pip_hdr = QHBoxLayout()
         self.lbl_pip_title = QLabel("FPV DRONE CAMERA  ⛶")
-        self.lbl_pip_title.setFont(QFont("Arial", 8, QFont.Bold))
+        self.lbl_pip_title.setFont(QFont(SPATIAL_FONT, 8, QFont.Bold))
         self.lbl_pip_title.setStyleSheet("color: #38bdf8; letter-spacing: 0.5px;")
         pip_hdr.addWidget(self.lbl_pip_title)
         pip_hdr.addStretch(1)
 
         self.lbl_eis_badge = QLabel("🛡️ EIS")
-        self.lbl_eis_badge.setFont(QFont("Arial", 7, QFont.Bold))
+        self.lbl_eis_badge.setFont(QFont(SPATIAL_FONT, 7, QFont.Bold))
         self.lbl_eis_badge.setStyleSheet("""
             background-color: rgba(16, 185, 129, 0.15);
             color: #34d399;
@@ -1383,7 +1570,7 @@ class NidarGcsWindow(QMainWindow):
         pip_hdr.addWidget(self.lbl_eis_badge)
 
         self.lbl_pip_live = QLabel("LIVE 1080p")
-        self.lbl_pip_live.setFont(QFont("Arial", 7, QFont.Bold))
+        self.lbl_pip_live.setFont(QFont(SPATIAL_FONT, 7, QFont.Bold))
         self.lbl_pip_live.setStyleSheet("color: #10b981;")
         pip_hdr.addWidget(self.lbl_pip_live)
         pip_vbox.addLayout(pip_hdr)
@@ -1404,14 +1591,12 @@ class NidarGcsWindow(QMainWindow):
         self.map_widget = ArenaMapWidget()
         self.map_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.lbl_camera = QLabel("WAITING FOR CAMERA STREAM...")
-        self.lbl_camera.setAlignment(Qt.AlignCenter)
-        self.lbl_camera.setStyleSheet("background-color: #030712; border-radius: 10px; color: #475569; font-size: 11px;")
-        self.lbl_camera.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.camera_widget = CameraViewerWidget()
+        self.camera_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # Initial layout: Map in Hero, Camera in PiP
         self.hero_content_layout.addWidget(self.map_widget)
-        self.pip_content_layout.addWidget(self.lbl_camera)
+        self.pip_content_layout.addWidget(self.camera_widget)
         self.update_segmented_buttons()
 
     def update_segmented_buttons(self):
@@ -1479,13 +1664,13 @@ class NidarGcsWindow(QMainWindow):
 
         # Detach widgets
         self.hero_content_layout.removeWidget(self.map_widget)
-        self.hero_content_layout.removeWidget(self.lbl_camera)
+        self.hero_content_layout.removeWidget(self.camera_widget)
         self.pip_content_layout.removeWidget(self.map_widget)
-        self.pip_content_layout.removeWidget(self.lbl_camera)
+        self.pip_content_layout.removeWidget(self.camera_widget)
 
         if self.view_mode == "map":
             self.hero_content_layout.addWidget(self.map_widget)
-            self.pip_content_layout.addWidget(self.lbl_camera)
+            self.pip_content_layout.addWidget(self.camera_widget)
             self.lbl_hero_title.setText("2D TACTICAL SLAM ARENA MAP")
             self.lbl_hero_title.setStyleSheet("color: #38bdf8; letter-spacing: 0.8px;")
             self.lbl_hero_badge.setText("MAP FOCUS")
@@ -1495,7 +1680,7 @@ class NidarGcsWindow(QMainWindow):
             self.lbl_pip_live.setText("LIVE 1080p")
             self.lbl_pip_live.setStyleSheet("color: #10b981;")
         else:
-            self.hero_content_layout.addWidget(self.lbl_camera)
+            self.hero_content_layout.addWidget(self.camera_widget)
             self.pip_content_layout.addWidget(self.map_widget)
             self.lbl_hero_title.setText("FPV DRONE CAMERA (LIVE 1080p HUD & AI DETECTIONS)")
             self.lbl_hero_title.setStyleSheet("color: #34d399; letter-spacing: 0.8px;")
@@ -1507,7 +1692,7 @@ class NidarGcsWindow(QMainWindow):
             self.lbl_pip_live.setStyleSheet("color: #38bdf8;")
 
         self.map_widget.show()
-        self.lbl_camera.show()
+        self.camera_widget.show()
         self.update_segmented_buttons()
 
     def toggle_view_mode(self):
@@ -1518,6 +1703,8 @@ class NidarGcsWindow(QMainWindow):
         default_name = f"/home/dexter/Downloads/Drone-simulation-2-main/map_exports/nidar_tactical_map_{int(time.time())}.png"
         fn, _ = QFileDialog.getSaveFileName(self, "Export High-Res 2D SLAM LiDAR Map", default_name, "PNG Image (*.png)")
         if fn:
+            if not fn.lower().endswith('.png'):
+                fn += '.png'
             info = {
                 'cov': self.backend.explored_pct,
                 'time': self.lbl_big_timer.text(),
@@ -1525,11 +1712,16 @@ class NidarGcsWindow(QMainWindow):
                 'survivors': list(self.backend.survivors_detailed or self.backend.survivors_list)
             }
             pix = self.map_widget.export_map_pixmap(info)
-            pix.save(fn, "PNG")
+            saved = pix.save(fn, "PNG")
+            self.btn_download_map.setText("✓ Map Saved" if saved else "Export Failed")
+            QTimer.singleShot(1800, lambda: self.btn_download_map.setText("💾 Export Map"))
 
     def on_relaunch_clicked(self):
         self._auto_export_done = False
+        self._last_surv_sig = None
         self.backend.send_relaunch_cmd()
+        self.btn_land.setEnabled(True)
+        self.btn_land.setText("🛩 Land / RTH")
         self.lbl_flight_mode.setText("RELAUNCHING")
         self.lbl_flight_mode.setStyleSheet("background-color: rgba(16, 185, 129, 0.2); color: #34d399; border-radius: 6px; padding: 2px 8px;")
         self.lbl_big_timer.setStyleSheet("""
@@ -1539,6 +1731,18 @@ class NidarGcsWindow(QMainWindow):
             border-radius: 10px;
             padding: 3px 14px;
         """)
+
+    def on_land_clicked(self):
+        self.backend.send_land_cmd()
+        self.lbl_flight_mode.setText("RETURNING HOME")
+        self.btn_land.setEnabled(False)
+        self.btn_land.setText("Return Requested")
+        QTimer.singleShot(3000, self._restore_land_button)
+
+    def _restore_land_button(self):
+        """Restore the command affordance while preserving the flight status."""
+        self.btn_land.setEnabled(True)
+        self.btn_land.setText("🛩 Land / RTH")
 
     def update_telemetry_ui(self):
         with self.backend.lock:
@@ -1583,13 +1787,13 @@ class NidarGcsWindow(QMainWindow):
 
             # 5. Position & Speed
             px, py = self.backend.drone_x, self.backend.drone_y
-            spd = self.backend.speed
+            spd = max(self.backend.speed, self.backend.pose_speed)
             self.lbl_coords.setText(f"📍 X: {px:+5.2f}m, Y: {py:+5.2f}m")
             self.lbl_speed.setText(f"🚀 SPEED: {spd:4.2f} m/s")
 
             # 6. Survivors Intel & Count
             cnt = self.backend.survivors_count
-            self.lbl_surv_pill.setText(f"👥 {cnt} / 6 Survivors")
+            self.lbl_surv_pill.setText(f"👥 {cnt} Survivors")
             self.lbl_surv_badge.setText(f"{cnt} CONFIRMED")
 
             # 7. JEV State Machine Feed
@@ -1613,28 +1817,30 @@ class NidarGcsWindow(QMainWindow):
                 self.backend.current_goal, active_survivors
             )
 
-            # 10. Update Survivor Cards Roster (Rebuild if any survivor data or count updates)
-            if active_survivors:
-                if self.lbl_no_surv.isVisible():
+            # 10. Rebuild the roster only when its content changes.  takeAt()
+            # removes both widgets and stretch items, preventing invisible
+            # spacers from accumulating after repeated tracker updates.
+            sig = [(s.get('id', i+1),
+                    round(float(s.get('map_x', s.get('x', 0.0))), 2),
+                    round(float(s.get('map_y', s.get('y', 0.0))), 2),
+                    s.get('confidence', 98), s.get('grid', ''))
+                   for i, s in enumerate(active_survivors)]
+            if getattr(self, '_last_surv_sig', None) != sig:
+                self._last_surv_sig = sig
+                while self.surv_vbox.count():
+                    item = self.surv_vbox.takeAt(0)
+                    widget = item.widget()
+                    if widget is not None and widget is not self.lbl_no_surv:
+                        widget.deleteLater()
+
+                if active_survivors:
                     self.lbl_no_surv.hide()
-
-                sig = [(s.get('id', i+1), round(float(s.get('map_x', s.get('x', 0.0))), 2),
-                        round(float(s.get('map_y', s.get('y', 0.0))), 2), s.get('confidence', 98),
-                        s.get('grid', '')) for i, s in enumerate(active_survivors)]
-                if getattr(self, '_last_surv_sig', None) != sig:
-                    self._last_surv_sig = sig
-                    # Clear existing cards
-                    for i in reversed(range(self.surv_vbox.count())):
-                        item = self.surv_vbox.itemAt(i)
-                        widget = item.widget()
-                        if widget and widget != self.lbl_no_surv:
-                            widget.deleteLater()
-
-                    # Add new cards
-                    for s in active_survivors:
-                        card = SpatialSurvivorCard(s)
-                        self.surv_vbox.addWidget(card)
-                    self.surv_vbox.addStretch(1)
+                    for survivor in active_survivors:
+                        self.surv_vbox.addWidget(SpatialSurvivorCard(survivor))
+                else:
+                    self.lbl_no_surv.show()
+                    self.surv_vbox.addWidget(self.lbl_no_surv)
+                self.surv_vbox.addStretch(1)
 
             raw_frame = self.backend.camera_frame
             roll = self.backend.drone_roll
@@ -1656,32 +1862,7 @@ class NidarGcsWindow(QMainWindow):
 
         # Camera Display: Live Feed or Landing Standby
         if is_mission_done:
-            cw = max(320, self.lbl_camera.width())
-            ch = max(140, self.lbl_camera.height())
-            standby_pix = QPixmap(cw, ch)
-            standby_pix.fill(QColor(8, 10, 15))
-            cp = QPainter(standby_pix)
-            cp.setRenderHint(QPainter.Antialiasing)
-
-            cp.setPen(QPen(QColor(239, 68, 68), 1))
-            cp.setBrush(QBrush(QColor(69, 10, 10, 180)))
-            cp.drawRoundedRect(14, 12, cw - 28, 26, 8, 8)
-
-            cp.setPen(QPen(QColor(254, 202, 202)))
-            cp.setFont(QFont("Arial", 8, QFont.Bold))
-            cp.drawText(QRect(14, 12, cw - 28, 26), Qt.AlignCenter, "🔴 CAMERA STANDBY — SENSORS POWERED DOWN")
-
-            cp.setPen(QPen(QColor(34, 197, 94)))
-            cp.setFont(QFont("Arial", 12, QFont.Bold))
-            cp.drawText(QRect(10, 48, cw - 20, 24), Qt.AlignCenter, "🏆 MISSION ACCOMPLISHED")
-
-            cp.setFont(QFont("Arial", 9))
-            cp.setPen(QPen(QColor(226, 232, 240)))
-            cp.drawText(QRect(10, 78, cw - 20, 20), Qt.AlignCenter, f"Explored: {exp_pct:.1f}%  |  Survivors: {cnt}/6")
-            cp.setPen(QPen(QColor(148, 163, 184)))
-            cp.drawText(QRect(10, 102, cw - 20, 18), Qt.AlignCenter, "Touchdown Verified on Base Helipad")
-            cp.end()
-            self.lbl_camera.setPixmap(standby_pix)
+            self.camera_widget.set_standby({'cov': exp_pct, 'surv': cnt})
             if self.view_mode == "map":
                 self.lbl_pip_live.setText("STANDBY")
                 self.lbl_pip_live.setStyleSheet("color: #ef4444;")
@@ -1691,45 +1872,36 @@ class NidarGcsWindow(QMainWindow):
                 self.lbl_pip_live.setText("LIVE 1080p")
                 self.lbl_pip_live.setStyleSheet("color: #10b981;")
 
-            h, w = raw_frame.shape[:2]
-            hud_img = raw_frame.copy()
-
-            # Crosshairs (Apple Sky / Cyan)
-            ch_cx, ch_cy = w // 2, h // 2
-            cv2.line(hud_img, (ch_cx - 22, ch_cy), (ch_cx + 22, ch_cy), (248, 189, 56), 1, cv2.LINE_AA)
-            cv2.line(hud_img, (ch_cx, ch_cy - 22), (ch_cx, ch_cy + 22), (248, 189, 56), 1, cv2.LINE_AA)
-            cv2.circle(hud_img, (ch_cx, ch_cy), 8, (248, 189, 56), 1, cv2.LINE_AA)
-
-            # Artificial Horizon Line (Apple Mint)
-            horizon_pitch_offset = int(pitch * 180)
-            dx = int(85 * math.cos(roll))
-            dy = int(85 * math.sin(roll))
-            cv2.line(hud_img, (ch_cx - dx, ch_cy + horizon_pitch_offset - dy),
-                              (ch_cx + dx, ch_cy + horizon_pitch_offset + dy), (80, 220, 50), 1, cv2.LINE_AA)
-
-            # In Camera Hero mode, add a sleek spatial top HUD banner
-            if self.view_mode == "camera":
-                yaw_deg = int((math.degrees(self.backend.drone_yaw) + 360) % 360)
-                hud_str = f"ALT: {alt:4.2f}m   Vz: {vz:+4.2f}m/s   SPD: {spd:4.2f}m/s   HDG: {yaw_deg:03d}°   🛡️ EIS: STABILIZED"
-                cv2.rectangle(hud_img, (14, 10), (435, 32), (15, 23, 42), -1)
-                cv2.rectangle(hud_img, (14, 10), (435, 32), (56, 189, 248), 1)
-                cv2.putText(hud_img, hud_str, (20, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (248, 250, 252), 1, cv2.LINE_AA)
-
-            rgb_img = cv2.cvtColor(hud_img, cv2.COLOR_BGR2RGB)
+            rgb_img = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB)
             qh, qw, qch = rgb_img.shape
             q_img = QImage(rgb_img.data, qw, qh, qch * qw, QImage.Format_RGB888)
-            pix = QPixmap.fromImage(q_img).scaled(self.lbl_camera.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.lbl_camera.setPixmap(pix)
+            pix = QPixmap.fromImage(q_img)
+
+            hero_hud = None
+            if self.view_mode == "camera":
+                yaw_deg = int((math.degrees(self.backend.drone_yaw) + 360) % 360)
+                hero_hud = {'alt': alt, 'vz': vz, 'spd': spd, 'hdg': yaw_deg}
+
+            self.camera_widget.set_pixmap(pix, hero_hud)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # APPLICATION ENTRYPOINT
 # ─────────────────────────────────────────────────────────────────────────────
+def _spin_backend(backend):
+    """Run ROS callbacks without printing a traceback during normal UI exit."""
+    try:
+        rclpy.spin(backend)
+    except Exception:
+        if rclpy.ok():
+            raise
+
+
 def main():
     rclpy.init()
     backend = GcsRosBackend()
 
-    ros_thread = threading.Thread(target=rclpy.spin, args=(backend,), daemon=True)
+    ros_thread = threading.Thread(target=_spin_backend, args=(backend,), daemon=True)
     ros_thread.start()
 
     app = QApplication(sys.argv)

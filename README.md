@@ -78,6 +78,24 @@ The facility contains **6 realistic standing survivor mannequins** ($1.75\text{ 
   - **Onboard Vision**: The 5MP WDR camera detects the vibrant rescue orange and fluorescent yellow colors at eye level, estimating range and relative bearing.
 - **Real-Time Tagging**: Once localized, each survivor is tagged on the map with persistent 3D pins and floating coordinate labels (`Survivor #N [X, Y]`), and permanently stamped into the 2D occupancy grid.
 
+### Survivor confirmation safety
+
+The default `target_mode=simulation` uses an orange/yellow signature for the cylindrical Gazebo mannequins. `target_mode=person` enables SSD/YOLO for human imagery. The simulation signature is a heuristic, not a trained mannequin detector, and its score is not a calibrated probability. Appearance alone never creates a map marker.
+
+- RGB proposals are evaluated against the aligned 640×480 RGB-D stream, which also supplies the HUD. RGB/depth sensor timestamps must agree within 75 ms.
+- A candidate must have repeated distinct close visual observations with a freestanding RGB-D depth discontinuity. LiDAR projections can request inspection but cannot commit markers.
+- Candidates farther than 2.0 m publish `/nidar/inspection_target` and are not added to the survivor map.
+- `jev_explorer.py` selects a collision-checked 1.15–1.60 m stand-off pose, approaches the candidate, and holds briefly for close-range confirmation.
+- Confirmed coordinates use the median of close observations and compensate depth from the visible torso surface to the object centre.
+
+Run the perception regression and integration tests with:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 -m unittest -v test_perception_safety.py test_ssd_object_detection.py
+python3 test_tri_modal_pipeline.py
+```
+
 ---
 
 ## 📡 Sensor Suite & ROS 2 Topic Architecture

@@ -5,7 +5,7 @@
 
 set -e
 
-export PATH="/opt/ros/jazzy/bin:/home/priyansh/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="/opt/ros/jazzy/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # NVIDIA CUDA & WSL2 GPU Hardware Acceleration (RTX 3050 offload)
 if [ -d "/usr/lib/wsl/lib" ]; then
@@ -33,6 +33,8 @@ echo "=========================================================="
 # Clean up any stale background processes from earlier runs
 pkill -9 -f jev_explorer.py 2>/dev/null || true
 pkill -9 -f drone_nav2_coordinator.py 2>/dev/null || true
+pkill -9 -f nidar_vision_tracker_node.py 2>/dev/null || true
+pkill -9 -f nidar_ssd_detector.py 2>/dev/null || true
 pkill -9 -f nidar_survivor_detector.py 2>/dev/null || true
 pkill -9 -f drone_tf_odom_publisher.py 2>/dev/null || true
 pkill -9 -f nidar_slam_node.py 2>/dev/null || true
@@ -59,6 +61,7 @@ cleanup() {
     done
     pkill -9 -f jev_explorer.py 2>/dev/null || true
     pkill -9 -f drone_nav2_coordinator.py 2>/dev/null || true
+    pkill -9 -f nidar_vision_tracker_node.py 2>/dev/null || true
     pkill -9 -f nidar_survivor_detector.py 2>/dev/null || true
     pkill -9 -f drone_tf_odom_publisher.py 2>/dev/null || true
     pkill -9 -f nidar_slam_node.py 2>/dev/null || true
@@ -120,9 +123,9 @@ if [ "$LAUNCH_RVIZ" = true ]; then
     sleep 1
 fi
 
-# 6. Start Autonomous Survivor Detector & Map Tagger
-echo "  5. Starting Autonomous Survivor Detector & Map Tagger..."
-python3 /home/dexter/Downloads/Drone-simulation-2-main/map/nidar_survivor_detector.py &
+# 6. Start Autonomous Survivor Detector & Map Tagger (Vision Tracker with Spatial Duplicate Suppression)
+echo "  5. Starting Autonomous Survivor Perception & Spatial Tracker Node..."
+python3 /home/dexter/Downloads/Drone-simulation-2-main/map/nidar_vision_tracker_node.py &
 PIDS+=($!)
 sleep 1
 

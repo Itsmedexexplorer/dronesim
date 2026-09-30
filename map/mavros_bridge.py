@@ -170,8 +170,13 @@ class MavrosBridgeNode(Node):
             tx = ty = tz = 0.0
             tqx = tqy = tqz = 0.0
             tqw = 1.0
-            last_z = 0.05
-            last_t = time.time()
+            last_x = None
+            last_y = None
+            last_z = None
+            last_t = None
+            smooth_vx = 0.0
+            smooth_vy = 0.0
+            smooth_vz = 0.0
 
             while self.running:
                 line = proc.stdout.readline()
@@ -218,9 +223,22 @@ class MavrosBridgeNode(Node):
                     yaw = math.atan2(siny, cosy)
 
                     now = time.time()
-                    dt = now - last_t
-                    vz = (tz - last_z) / dt if dt > 0.01 else 0.0
-                    last_z, last_t = tz, now
+                    if last_t is not None and last_x is not None:
+                        dt = now - last_t
+                        if 0.005 < dt < 0.5:
+                            raw_vx = (tx - last_x) / dt
+                            raw_vy = (ty - last_y) / dt
+                            raw_vz = (tz - last_z) / dt
+                            # Exponential moving average filter (alpha=0.35) for smooth velocity readout
+                            alpha = 0.35
+                            smooth_vx = alpha * raw_vx + (1.0 - alpha) * smooth_vx
+                            smooth_vy = alpha * raw_vy + (1.0 - alpha) * smooth_vy
+                            smooth_vz = alpha * raw_vz + (1.0 - alpha) * smooth_vz
+                        elif dt >= 0.5:
+                            smooth_vx = 0.0
+                            smooth_vy = 0.0
+                            smooth_vz = 0.0
+                    last_x, last_y, last_z, last_t = tx, ty, tz, now
 
                     with self.pose_lock:
                         self.drone_x = tx
@@ -231,7 +249,9 @@ class MavrosBridgeNode(Node):
                         self.drone_qy = tqy
                         self.drone_qz = tqz
                         self.drone_yaw = yaw
-                        self.drone_vz = vz
+                        self.drone_vx = smooth_vx
+                        self.drone_vy = smooth_vy
+                        self.drone_vz = smooth_vz
                         self.first_pose_received = True
 
             proc.kill()

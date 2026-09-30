@@ -10,6 +10,9 @@ WORLD_FILE="/home/dexter/Downloads/Drone-simulation-2-main/worlds/nidar_drone_wo
 # Clean up any lingering gz sim processes
 pkill -9 -f "gz sim" 2>/dev/null || true
 
+# Configure Gazebo Sim model resource paths
+export GZ_SIM_RESOURCE_PATH="/home/dexter/Downloads/Drone-simulation-2-main/models:$HOME/.gz/models:$GZ_SIM_RESOURCE_PATH"
+
 echo "=========================================================="
 echo "   NIDAR AUTONOMOUS DRONE - GAZEBO SIMULATION ENGINE      "
 echo "=========================================================="

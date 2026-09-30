@@ -168,11 +168,14 @@ class NidarSlamNode(Node):
     def cb_survivor_markers(self, msg: MarkerArray):
         with self.grid_lock:
             for m in msg.markers:
-                if m.ns == 'survivors' and m.id % 5 == 0:  # Ground disc marker
-                    pos_key = (round(m.pose.position.x, 1), round(m.pose.position.y, 1))
+                if m.ns == 'survivors' and m.id % 10 == 0:  # Ground disc marker
+                    pos_key = m.id // 10
+                    for existing in self.confirmed_survivors:
+                        if existing['id'] == pos_key:
+                            existing.update(x=m.pose.position.x, y=m.pose.position.y)
                     if pos_key not in self.stamped_survivors:
                         self.stamped_survivors.add(pos_key)
-                        sid = (m.id // 5)
+                        sid = m.id // 10
                         self.confirmed_survivors.append({
                             'id': sid,
                             'x': m.pose.position.x,
@@ -238,64 +241,36 @@ class NidarSlamNode(Node):
             c_drone = world_to_cell(cx, cy)
             if not c_drone: return
             x0, y0 = c_drone
-            
-            for i, r in enumerate(ranges):
-                if math.isinf(r) or math.isnan(r) or r <= msg.range_min:
-                    continue
-                ray_ang = (yaw + angle_min + i * angle_step + math.pi) % (2 * math.pi) - math.pi
-                hit_wall = (r < max_r - 0.10)
-                dist_ray = min(r, max_r)
 
-                cos_ang = math.cos(ray_ang)
-                sin_ang = math.sin(ray_ang)
-
-                wx = cx + dist_ray * cos_ang
-                wy = cy + dist_ray * sin_ang
-                
-                c_end = world_to_cell(wx, wy)
-                if not c_end: continue
-                x1, y1 = c_end
-
-                # Draw free space using cv2.line (much faster and gapless Bresenham)
-                # To do this safely on the grid, we can just use cv2.line on a temp array, but 
-                # since we need probabilistic updates, we can just generate the line points.
-                # Actually, drawing directly on a numpy array is faster using cv2.line!
-                # Wait, cv2.line overwrites values. For probabilities, we can just subtract.
-                # Since OpenCV doesn't do "subtract line", we can just use np.clip.
-                pass
-                
             # Actually, to do probabilistic updates in bulk very fast:
             # Draw all free lines on a mask
             free_mask = np.zeros_like(self.prob_grid, dtype=np.uint8)
             wall_mask = np.zeros_like(self.prob_grid, dtype=np.uint8)
-            
+
             for i, r in enumerate(ranges):
                 if math.isinf(r) or math.isnan(r) or r <= msg.range_min:
                     continue
                 ray_ang = (yaw + angle_min + i * angle_step + math.pi) % (2 * math.pi) - math.pi
                 hit_wall = (r < max_r - 0.10)
                 dist_ray = min(r, max_r)
-                
+
                 # Draw free space only up to 0.15m before the wall to prevent erasing walls!
                 free_dist = max(0.0, dist_ray - 0.15) if hit_wall else dist_ray
                 fwx = cx + free_dist * math.cos(ray_ang)
                 fwy = cy + free_dist * math.sin(ray_ang)
                 c_free = world_to_cell(fwx, fwy)
-                
+
                 if c_free:
                     cv2.line(free_mask, (x0, y0), (c_free[0], c_free[1]), 8, 1)
-                
+
                 if hit_wall:
                     wx = cx + dist_ray * math.cos(ray_ang)
                     wy = cy + dist_ray * math.sin(ray_ang)
                     c_end = world_to_cell(wx, wy)
                     if c_end:
                         x1, y1 = c_end
-                        in_gate = (-6.75 <= wx <= -4.85 and -7.65 <= wy <= -7.35)
-                        near_survivor = any(math.hypot(wx - s['x'], wy - s['y']) < 0.55 for s in self.confirmed_survivors)
-                        if not in_gate and not near_survivor:
-                            cv2.circle(wall_mask, (x1, y1), 0, 30, -1)
-                        
+                        cv2.circle(wall_mask, (x1, y1), 0, 30, -1)
+
             # Apply masks
             self.prob_grid = np.clip(self.prob_grid.astype(np.int16) - free_mask, 0, 100).astype(np.uint8)
             self.prob_grid = np.clip(self.prob_grid.astype(np.int16) + wall_mask, 0, 100).astype(np.uint8)
@@ -304,13 +279,8 @@ class NidarSlamNode(Node):
         with self.grid_lock:
             prob_copy = self.prob_grid.copy()
 
-        # 1. Guarantee South Gate doorway and Helipad Chute are clear and free for Nav2
-        for gx in np.arange(-6.70, -4.90 + 0.02, GRID_RES):
-            for gy in np.arange(-9.50, -7.20 + 0.02, GRID_RES):
-                cell = world_to_cell(gx, gy)
-                if cell:
-                    c, r = cell
-                    prob_copy[r, c] = 0
+        # Free space must come from sensor evidence, including the entry gate.
+        # Never erase a real obstruction just because a nominal route crosses it.
 
         now_msg = self.get_clock().now().to_msg()
         map_msg = OccupancyGrid()

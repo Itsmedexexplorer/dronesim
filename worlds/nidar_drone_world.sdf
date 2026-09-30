@@ -1898,185 +1898,155 @@
     </model>
 
     <!-- ============================================================= -->
-    <!--     NIDAR AIRMOUSE CHALLENGE: 6 STANDING SURVIVOR MODELS     -->
+    <!--     NIDAR AIRMOUSE CHALLENGE: 6 STANDING SURVIVOR MODELS - RESHUFFLED POSITIONS     -->
     <!-- ============================================================= -->
 
-    <!-- Survivor 1 (Room 0_1 - South-West Sector) -->
+    <!-- Survivor 1 (Room 0_1 - South-West Sector: Realistic Textured Rescue Randy) -->
     <model name="survivor_1">
       <static>true</static>
-      <pose>-5.100 -1.700 0.875 0 0 0</pose>
+      <pose>5.100 1.700 0.000 0 0 -0.523</pose>
       <link name="link">
-        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
-        <visual name="body">
-          <pose>0 0 -0.150 0 0 0</pose>
-          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+        <collision name="col">
+          <pose>0 0 0.875 0 0 0</pose>
+          <geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <mesh>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/meshes/rescue_randy.dae</uri>
+            </mesh>
+          </geometry>
           <material>
-            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
-            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+            <diffuse>1.0 1.0 1.0 1.0</diffuse>
+            <specular>0.4 0.4 0.4 1.0</specular>
+            <pbr>
+              <metal>
+                <albedo_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_albedo.png</albedo_map>
+                <normal_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_normal.png</normal_map>
+                <roughness_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_roughness.png</roughness_map>
+              </metal>
+            </pbr>
           </material>
-        </visual>
-        <visual name="safety_vest">
-          <pose>0 0 0.250 0 0 0</pose>
-          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
-          <material>
-            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
-            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
-          </material>
-        </visual>
-        <visual name="head">
-          <pose>0 0 0.650 0 0 0</pose>
-          <geometry><sphere><radius>0.130</radius></sphere></geometry>
-          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
         </visual>
       </link>
     </model>
 
-    <!-- Survivor 2 (Room 1_0 - South-Central Sector) -->
+    <!-- Survivor 2 (Room 1_0 - South-Central Sector: Realistic Standing Person with Clothing) -->
     <model name="survivor_2">
       <static>true</static>
-      <pose>-1.700 -5.100 0.875 0 0 0.785</pose>
+      <pose>-5.100 3.400 0.000 0 0 -1.571</pose>
       <link name="link">
-        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
-        <visual name="body">
-          <pose>0 0 -0.150 0 0 0</pose>
-          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
-          <material>
-            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
-            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
-          </material>
-        </visual>
-        <visual name="safety_vest">
-          <pose>0 0 0.250 0 0 0</pose>
-          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
-          <material>
-            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
-            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
-          </material>
-        </visual>
-        <visual name="head">
-          <pose>0 0 0.650 0 0 0</pose>
-          <geometry><sphere><radius>0.130</radius></sphere></geometry>
-          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        <collision name="col">
+          <pose>0 0 0.875 0 0 0</pose>
+          <geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <pose>0 0 0.02 0.04 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/standing person/3/files/meshes/standing.dae</uri>
+            </mesh>
+          </geometry>
         </visual>
       </link>
     </model>
 
-    <!-- Survivor 3 (Room 2_0 - South-East Sector) -->
+    <!-- Survivor 3 (Room 2_0 - South-East Sector: Realistic Textured Rescue Randy) -->
     <model name="survivor_3">
       <static>true</static>
-      <pose>1.700 -3.400 0.875 0 0 1.571</pose>
+      <pose>-5.100 -1.700 0.000 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
-        <visual name="body">
-          <pose>0 0 -0.150 0 0 0</pose>
-          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+        <collision name="col">
+          <pose>0 0 0.875 0 0 0</pose>
+          <geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <mesh>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/meshes/rescue_randy.dae</uri>
+            </mesh>
+          </geometry>
           <material>
-            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
-            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+            <diffuse>1.0 1.0 1.0 1.0</diffuse>
+            <specular>0.4 0.4 0.4 1.0</specular>
+            <pbr>
+              <metal>
+                <albedo_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_albedo.png</albedo_map>
+                <normal_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_normal.png</normal_map>
+                <roughness_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_roughness.png</roughness_map>
+              </metal>
+            </pbr>
           </material>
-        </visual>
-        <visual name="safety_vest">
-          <pose>0 0 0.250 0 0 0</pose>
-          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
-          <material>
-            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
-            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
-          </material>
-        </visual>
-        <visual name="head">
-          <pose>0 0 0.650 0 0 0</pose>
-          <geometry><sphere><radius>0.130</radius></sphere></geometry>
-          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
         </visual>
       </link>
     </model>
 
-    <!-- Survivor 4 (Room 3_2 - East Sector) -->
+    <!-- Survivor 4 (Room 3_2 - East Sector: Realistic Standing Person with Clothing) -->
     <model name="survivor_4">
       <static>true</static>
-      <pose>5.100 1.700 0.875 0 0 -0.523</pose>
+      <pose>-1.700 5.100 0.000 0 0 3.1415</pose>
       <link name="link">
-        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
-        <visual name="body">
-          <pose>0 0 -0.150 0 0 0</pose>
-          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
-          <material>
-            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
-            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
-          </material>
-        </visual>
-        <visual name="safety_vest">
-          <pose>0 0 0.250 0 0 0</pose>
-          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
-          <material>
-            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
-            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
-          </material>
-        </visual>
-        <visual name="head">
-          <pose>0 0 0.650 0 0 0</pose>
-          <geometry><sphere><radius>0.130</radius></sphere></geometry>
-          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        <collision name="col">
+          <pose>0 0 0.875 0 0 0</pose>
+          <geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <pose>0 0 0.02 0.04 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/standing person/3/files/meshes/standing.dae</uri>
+            </mesh>
+          </geometry>
         </visual>
       </link>
     </model>
 
-    <!-- Survivor 5 (Room 1_3 - North-Central Sector) -->
+    <!-- Survivor 5 (Room 1_3 - North-Central Sector: Realistic Textured Rescue Randy) -->
     <model name="survivor_5">
       <static>true</static>
-      <pose>-1.700 5.100 0.875 0 0 3.1415</pose>
+      <pose>1.700 -3.400 0.000 0 0 1.571</pose>
       <link name="link">
-        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
-        <visual name="body">
-          <pose>0 0 -0.150 0 0 0</pose>
-          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
+        <collision name="col">
+          <pose>0 0 0.875 0 0 0</pose>
+          <geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <mesh>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/meshes/rescue_randy.dae</uri>
+            </mesh>
+          </geometry>
           <material>
-            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
-            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
+            <diffuse>1.0 1.0 1.0 1.0</diffuse>
+            <specular>0.4 0.4 0.4 1.0</specular>
+            <pbr>
+              <metal>
+                <albedo_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_albedo.png</albedo_map>
+                <normal_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_normal.png</normal_map>
+                <roughness_map>https://fuel.gazebosim.org/1.0/openrobotics/models/rescue randy/3/files/materials/textures/rescue_randy_roughness.png</roughness_map>
+              </metal>
+            </pbr>
           </material>
-        </visual>
-        <visual name="safety_vest">
-          <pose>0 0 0.250 0 0 0</pose>
-          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
-          <material>
-            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
-            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
-          </material>
-        </visual>
-        <visual name="head">
-          <pose>0 0 0.650 0 0 0</pose>
-          <geometry><sphere><radius>0.130</radius></sphere></geometry>
-          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
         </visual>
       </link>
     </model>
 
-    <!-- Survivor 6 (Room 0_2 - North-West Sector) -->
+    <!-- Survivor 6 (Room 0_2 - North-West Sector: Realistic Standing Person with Clothing) -->
     <model name="survivor_6">
       <static>true</static>
-      <pose>-5.100 3.400 0.875 0 0 -1.571</pose>
+      <pose>-1.700 -5.100 0.000 0 0 0.785</pose>
       <link name="link">
-        <collision name="col"><geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry></collision>
-        <visual name="body">
-          <pose>0 0 -0.150 0 0 0</pose>
-          <geometry><cylinder><radius>0.220</radius><length>1.250</length></cylinder></geometry>
-          <material>
-            <ambient>1.0 0.35 0.0 1</ambient><diffuse>1.0 0.35 0.0 1</diffuse>
-            <specular>0.4 0.2 0.1 1</specular><emissive>0.35 0.12 0.0 1</emissive>
-          </material>
-        </visual>
-        <visual name="safety_vest">
-          <pose>0 0 0.250 0 0 0</pose>
-          <geometry><cylinder><radius>0.230</radius><length>0.420</length></cylinder></geometry>
-          <material>
-            <ambient>0.95 0.95 0.15 1</ambient><diffuse>0.95 0.95 0.15 1</diffuse>
-            <specular>0.5 0.5 0.2 1</specular><emissive>0.40 0.40 0.05 1</emissive>
-          </material>
-        </visual>
-        <visual name="head">
-          <pose>0 0 0.650 0 0 0</pose>
-          <geometry><sphere><radius>0.130</radius></sphere></geometry>
-          <material><ambient>0.85 0.65 0.50 1</ambient><diffuse>0.85 0.65 0.50 1</diffuse></material>
+        <collision name="col">
+          <pose>0 0 0.875 0 0 0</pose>
+          <geometry><cylinder><radius>0.240</radius><length>1.750</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <pose>0 0 0.02 0.04 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/standing person/3/files/meshes/standing.dae</uri>
+            </mesh>
+          </geometry>
         </visual>
       </link>
     </model>
@@ -2252,12 +2222,40 @@
           <topic>/nidar/camera</topic>
           <update_rate>30</update_rate>
           <camera>
-            <horizontal_fov>1.92</horizontal_fov>
-            <image><width>1920</width><height>1080</height><format>R8G8B8</format></image>
+            <horizontal_fov>2.00</horizontal_fov>
+            <image><width>1280</width><height>720</height><format>R8G8B8</format></image>
             <clip><near>0.05</near><far>50.0</far></clip>
           </camera>
           <always_on>1</always_on>
           <visualize>true</visualize>
+        </sensor>
+
+        <!-- ================= SENSOR 4: Surround Left Camera (+90° / Y-Left) ================= -->
+        <sensor name="camera_left" type="camera">
+          <pose>0 0.08 0.02 0 0 1.5708</pose>
+          <topic>/nidar/camera_left</topic>
+          <update_rate>15</update_rate>
+          <camera>
+            <horizontal_fov>1.80</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>25.0</far></clip>
+          </camera>
+          <always_on>1</always_on>
+          <visualize>false</visualize>
+        </sensor>
+
+        <!-- ================= SENSOR 5: Surround Right Camera (-90° / Y-Right) ================= -->
+        <sensor name="camera_right" type="camera">
+          <pose>0 -0.08 0.02 0 0 -1.5708</pose>
+          <topic>/nidar/camera_right</topic>
+          <update_rate>15</update_rate>
+          <camera>
+            <horizontal_fov>1.80</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>25.0</far></clip>
+          </camera>
+          <always_on>1</always_on>
+          <visualize>false</visualize>
         </sensor>
 
         <!-- Electronics Payload -->
