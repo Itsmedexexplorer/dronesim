@@ -13,3 +13,5 @@ test_parse.py
 measure_latency.py
 get_altitude.py
 .DS_Store
+videos/
+tmp/

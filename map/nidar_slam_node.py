@@ -77,6 +77,43 @@ def world_to_cell(wx, wy):
     return None
 
 
+def bresenham_cells(start, end):
+    """Return every integer grid cell crossed by a ray, including both ends."""
+    x0, y0 = start
+    x1, y1 = end
+    cells = []
+    dx = abs(x1 - x0)
+    sx = 1 if x0 < x1 else -1
+    dy = -abs(y1 - y0)
+    sy = 1 if y0 < y1 else -1
+    error = dx + dy
+    while True:
+        cells.append((x0, y0))
+        if x0 == x1 and y0 == y1:
+            return cells
+        twice_error = 2 * error
+        if twice_error >= dy:
+            error += dy
+            x0 += sx
+        if twice_error <= dx:
+            error += dx
+            y0 += sy
+
+
+def clip_free_ray_at_wall(prob_grid, start, end, occupied_threshold=65):
+    """Clip free-space evidence before the first already established wall.
+
+    This prevents a noisy or delayed long-range scan from carving a false mapped
+    corridor through an obstacle that previous scans have consistently observed.
+    Returns ``(endpoint, blocked)``.
+    """
+    cells = bresenham_cells(start, end)
+    for index, (x, y) in enumerate(cells[1:], start=1):
+        if prob_grid[y, x] > occupied_threshold:
+            return cells[max(0, index - 1)], True
+    return end, False
+
+
 class NidarSlamNode(Node):
     def __init__(self):
         super().__init__('nidar_slam_node')
@@ -95,6 +132,18 @@ class NidarSlamNode(Node):
         self.drone_pitch = 0.0
         self.drone_yaw = 0.0
         self.pose_lock = threading.Lock()
+
+        # Conservative inverse-sensor model. A maximum-range return is useful
+        # free-space evidence, but becomes unreliable at long range in narrow
+        # doorways. Keep that evidence local and use a thin ray footprint.
+        self.declare_parameter('lidar_topic', '/nidar/lidar')
+        self.declare_parameter('trusted_free_range_m', 6.0)
+        self.declare_parameter('free_ray_thickness_cells', 2)
+        self.lidar_topic = str(self.get_parameter('lidar_topic').value)
+        self.trusted_free_range_m = float(
+            self.get_parameter('trusted_free_range_m').value)
+        self.free_ray_thickness_cells = max(
+            1, int(self.get_parameter('free_ray_thickness_cells').value))
 
         # Flight Trajectory & Survivor Tracking for Map Export
         self.flight_path = []
@@ -115,10 +164,14 @@ class NidarSlamNode(Node):
         )
         self.pub_map = self.create_publisher(OccupancyGrid, '/map', map_qos)
 
-        # Gazebo LiDAR subscriber (subscribing to both /nidar/lidar and /lidar)
+        # One canonical Gazebo scan source. Subscribing to aliases duplicated
+        # evidence and made the same distant ray become "mapped" too quickly.
         self.gz_node = GzNode()
-        self.gz_node.subscribe(GzLaserScan, '/nidar/lidar', self.cb_lidar)
-        self.gz_node.subscribe(GzLaserScan, '/lidar', self.cb_lidar)
+        self.gz_node.subscribe(GzLaserScan, self.lidar_topic, self.cb_lidar)
+        self.get_logger().info(
+            f'LiDAR mapping source: {self.lidar_topic}; trusted free range '
+            f'{self.trusted_free_range_m:.1f} m; ray width '
+            f'{self.free_ray_thickness_cells} cells')
 
         # Survivor Map Tagging Subscriber: logs detected survivors
         survivor_qos = QoSProfile(
@@ -254,16 +307,27 @@ class NidarSlamNode(Node):
                 hit_wall = (r < max_r - 0.10)
                 dist_ray = min(r, max_r)
 
+                # A no-hit / maximum-range beam must not paint the whole arena.
+                # It is still useful, but only inside a configurable trusted
+                # radius around the actual drone pose.
+                if not hit_wall:
+                    dist_ray = min(dist_ray, self.trusted_free_range_m)
+
                 # Draw free space only up to 0.15m before the wall to prevent erasing walls!
                 free_dist = max(0.0, dist_ray - 0.15) if hit_wall else dist_ray
                 fwx = cx + free_dist * math.cos(ray_ang)
                 fwy = cy + free_dist * math.sin(ray_ang)
                 c_free = world_to_cell(fwx, fwy)
 
+                blocked_by_known_wall = False
                 if c_free:
-                    cv2.line(free_mask, (x0, y0), (c_free[0], c_free[1]), 8, 1)
+                    c_free, blocked_by_known_wall = clip_free_ray_at_wall(
+                        self.prob_grid, (x0, y0), c_free)
+                    cv2.line(
+                        free_mask, (x0, y0), c_free, 1,
+                        self.free_ray_thickness_cells)
 
-                if hit_wall:
+                if hit_wall and not blocked_by_known_wall:
                     wx = cx + dist_ray * math.cos(ray_ang)
                     wy = cy + dist_ray * math.sin(ray_ang)
                     c_end = world_to_cell(wx, wy)
@@ -315,14 +379,9 @@ class NidarSlamNode(Node):
                 last_y = self.drone_y
                 last_yaw = self.drone_yaw
 
-            # 1. South gate and helipad chute opening guarantee
-            for gx in np.arange(-6.70, -4.90 + 0.02, GRID_RES):
-                for gy in np.arange(-9.50, -7.20 + 0.02, GRID_RES):
-                    cell = world_to_cell(gx, gy)
-                    if cell:
-                        prob_copy[cell[1], cell[0]] = 0
-
-            # 2. Build RGB image
+            # Build the export solely from accumulated sensor evidence. Older
+            # versions painted the helipad chute free during export, which made
+            # an unvisited region look mapped and broke map provenance.
             rgb = np.full((GRID_N, GRID_N, 3), 160, dtype=np.uint8)
             rgb[prob_copy < 40] = [240, 240, 240]
             rgb[prob_copy > 65] = [25, 25, 25]

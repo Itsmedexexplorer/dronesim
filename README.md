@@ -19,7 +19,7 @@ The NIDAR AirMouse drone executes end-to-end autonomous search and rescue missio
 4. **Active 360° LiDAR Reactive Collision Shield**: Continuous 30 Hz proximity monitor computes an inverse-distance repulsive velocity field. If any wall or corner approaches $< 0.35\text{ m}$, the coordinator triggers an instant **hard brake and pushback**, completely preventing collisions.
 5. **Human / Survivor Detection & 2D Map Tagging**: Onboard computer vision node (`nidar_survivor_detector.py`) inspects the 5MP WDR camera feed (`/nidar/camera`) in real-time, segments International Rescue Orange suits and fluorescent yellow safety vests, projects pixel centroids to map coordinates, and tags them with persistent 3D pins and floating text labels (`Survivor #N (X, Y)`).
 6. **Permanent 2D Map Etching**: Confirmed survivor coordinates are automatically stamped as occupied obstacles directly onto the `/map` SLAM grid.
-7. **Autonomous Exit & Precision Touchdown**: The explorer has no survivor-count cap. It returns only after LiDAR coverage, camera-viewpoint recovery, and queued inspections are complete, then plots an exit trajectory through the South Gate, descends softly at $-0.25\text{ m/s}$, cuts the motors, and disarms.
+7. **Evidence-Bounded Search & Precision Touchdown**: The explorer has no survivor-count or time cap. After 10 minutes it prioritizes remaining unknown LiDAR gaps, then audits mapped blocks and camera viewpoints. It returns only after search confidence remains above 97%, or when the operator requests RTH.
 
 ---
 
@@ -109,7 +109,7 @@ python3 test_tri_modal_pipeline.py
 | **MAVROS Velocity Actuation**| `mavros_msgs/PositionTarget`| `/mavros/setpoint_raw/local` | 30 Hz | Body-frame velocity vector injection ($v_x, v_y, v_z, \omega_z$) |
 | **2D SLAM Occupancy Grid** | `nav_msgs/OccupancyGrid` | `/map` | 5 Hz | Real-time 2D arena floor plan with survivor stamps |
 | **Tagged Survivor Markers** | `visualization_msgs/MarkerArray` | `/nidar/survivor_markers` | 2 Hz | 3D colored pins and floating coordinate text in RViz |
-| **Survivor Count** | `std_msgs/Int32` | `/nidar/survivor_count` | Event | Total confirmed survivors localized (0 to 6) |
+| **Survivor Count** | `std_msgs/Int32` | `/nidar/survivor_count` | Event | Open-ended total of uniquely confirmed survivors |
 | **Mission Completion** | `std_msgs/Bool` | `/nidar/mission_complete` | Event | Triggers return-to-home and gate exit sequence |
 | **Emergency Landing Trigger** | `std_msgs/Bool` | `/nidar/land_command` | Event | Triggers coordinator precision touchdown over helipad |
 
@@ -197,12 +197,26 @@ The script orchestrates the entire operational pipeline automatically:
 
 ## 🏁 Mission Completion & Autonomous Exit
 
-When LiDAR coverage is complete, no unscanned camera-viewpoint gaps remain, and
-the active inspection queue is empty:
+Ten minutes is a strategy switch, not a timeout:
+
+1. From 0–10 minutes, normal frontier mapping remains primary.
+2. At 90% coverage or 10 minutes, remaining unknown/black LiDAR gaps become the
+   highest priority. The drone approaches from safe free space and faces the
+   unknown centroid before its normal 360° scan.
+3. It then audits mapped 2 m regions that are not visible from a successful
+   360-degree RGB-D sweep. Coverage uses camera range plus occupancy-grid
+   line-of-sight, so one sweep can cover adjacent open regions but never sees
+   through a wall or unknown space.
+4. Search confidence combines LiDAR coverage (70%), line-of-sight camera
+   coverage (20%), and resolved inspections (10%). It remains capped below 97%
+   while a queued inspection or meaningful frontier is unresolved; tiny
+   residual edge noise does not keep a completed mission alive indefinitely.
+5. Confidence must remain above 97% for 15 seconds before autonomous RTH.
+
+During return:
 1. The explorer cancels frontier tasks and transitions to `EXITING_MAZE`.
-2. Plans a path through the South Gate interior corridor $(-5.80, -6.00)$.
-3. Flies out through the gate to the Launch Helipad $(-5.80, -8.80)$.
-4. Emits `/nidar/land_command`, causing the coordinator to execute a soft touchdown ($-0.25\text{ m/s}$), cut the motors, and report:
+2. It plans a path through the South Gate and flies to the Launch Helipad.
+3. It emits `/nidar/land_command`, causing a soft touchdown, motor cutoff, and disarm:
    ```
    🏁 [MISSION COMPLETE] Drone safely landed on helipad! Motors disarmed.
    ```

@@ -18,12 +18,68 @@ from nav_msgs.msg import OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import Int32, Bool, String
+from std_msgs.msg import Int32, Bool, String, Float32
 
 ARENA_LIMIT = 7.1  # Comprehensive 15x15m indoor compound boundary (+/-7.5m outer walls)
 UNKNOWN  = -1
 FREE     = 0
 OCCUPIED = 100
+
+
+def calculate_search_confidence(map_coverage, visual_coverage,
+                                pending_inspections, frontier_count,
+                                sectors_toured, has_block_gap,
+                                has_fine_visual_gap):
+    """Conservative evidence score for count-independent search completion."""
+    map_score = float(np.clip(map_coverage, 0.0, 100.0))
+    visual_score = float(np.clip(visual_coverage, 0.0, 100.0))
+    inspection_score = max(0.0, 100.0 - 20.0 * pending_inspections)
+    # LiDAR coverage is the primary evidence that the bounded arena has been
+    # searched. Camera coverage is independent corroboration, not a demand to
+    # physically occupy every arbitrary grid block. A 97.8% map plus 94% of
+    # free-space viewpoints observed by successful 360-degree RGB-D sweeps can
+    # therefore cross 97%, provided no unresolved evidence remains.
+    score = 0.70 * map_score + 0.20 * visual_score + 0.10 * inspection_score
+    score -= min(10.0, 0.75 * max(0, frontier_count))
+    if has_fine_visual_gap:
+        score -= 5.0
+    if not sectors_toured:
+        score = min(score, 85.0)
+    # A score above 97 has a strict meaning: no unresolved evidence remains.
+    if (pending_inspections > 0 or frontier_count > 0 or has_block_gap or
+            has_fine_visual_gap):
+        score = min(score, 96.5)
+    return float(np.clip(score, 0.0, 100.0))
+
+
+def grid_line_is_clear(grid, start, end):
+    """True when a camera ray crosses only known free occupancy cells.
+
+    Unknown cells and occupied cells both occlude the camera. This is a small
+    integer Bresenham traversal so audit confidence cannot see through walls.
+    The first cell is ignored because it is the camera's own position.
+    """
+    x0, y0 = start
+    x1, y1 = end
+    dx = abs(x1 - x0)
+    sx = 1 if x0 < x1 else -1
+    dy = -abs(y1 - y0)
+    sy = 1 if y0 < y1 else -1
+    error = dx + dy
+    first = True
+    while True:
+        if not first and grid[y0, x0] != FREE:
+            return False
+        first = False
+        if x0 == x1 and y0 == y1:
+            return True
+        twice_error = 2 * error
+        if twice_error >= dy:
+            error += dy
+            x0 += sx
+        if twice_error <= dx:
+            error += dx
+            y0 += sy
 
 def _clean_exit_handler(sig, frame):
     os._exit(0)
@@ -88,6 +144,8 @@ class JevDecisionLayer(Node):
         self.pub_complete = self.create_publisher(Bool, '/nidar/mission_complete', 10)
         self.pub_goal = self.create_publisher(PoseStamped, '/nidar/current_goal', 10)
         self.pub_status = self.create_publisher(String, '/nidar/jev_status', 10)
+        self.pub_search_confidence = self.create_publisher(
+            Float32, '/nidar/search_confidence', 10)
 
         self.active_goal_handle = None
         self.goal_status = None
@@ -105,6 +163,14 @@ class JevDecisionLayer(Node):
         self.declare_parameter('camera_scan_headings', 5)
         self.declare_parameter('camera_scan_dwell_s', 0.70)
         self.declare_parameter('camera_scan_goal_timeout_s', 6.0)
+        self.declare_parameter('audit_start_coverage', 90.0)
+        self.declare_parameter('audit_start_time_s', 600.0)
+        self.declare_parameter('audit_block_size_m', 2.0)
+        self.declare_parameter('camera_audit_visibility_m', 3.2)
+        self.declare_parameter('camera_audit_completion_pct', 94.0)
+        self.declare_parameter('completion_frontier_min_cells', 12)
+        self.declare_parameter('completion_confidence_threshold', 97.0)
+        self.declare_parameter('completion_stability_s', 15.0)
         self.rotation_in_place = False
         self.camera_scan_enabled = bool(
             self.get_parameter('camera_scan_enabled').value)
@@ -114,7 +180,27 @@ class JevDecisionLayer(Node):
             self.get_parameter('camera_scan_dwell_s').value))
         self.scan_goal_timeout_s = max(2.0, float(
             self.get_parameter('camera_scan_goal_timeout_s').value))
+        self.audit_start_coverage = float(
+            self.get_parameter('audit_start_coverage').value)
+        self.audit_start_time_s = max(60.0, float(
+            self.get_parameter('audit_start_time_s').value))
+        self.audit_block_size_m = max(1.0, float(
+            self.get_parameter('audit_block_size_m').value))
+        self.camera_audit_visibility_m = max(1.5, float(
+            self.get_parameter('camera_audit_visibility_m').value))
+        self.camera_audit_completion_pct = float(np.clip(
+            self.get_parameter('camera_audit_completion_pct').value,
+            85.0, 100.0))
+        self.completion_frontier_min_cells = max(3, int(
+            self.get_parameter('completion_frontier_min_cells').value))
+        self.completion_confidence_threshold = float(
+            self.get_parameter('completion_confidence_threshold').value)
+        self.completion_stability_s = max(3.0, float(
+            self.get_parameter('completion_stability_s').value))
         self.visual_scan_locations = []
+        self.mission_started_at = None
+        self.completion_confidence_since = None
+        self.last_block_coverage_pct = 0.0
         self.sub_route = self.create_subscription(Path, '/plan', self.cb_route, 10)
         self.sub_obstacles = self.create_subscription(LaserScan, '/scan', self.cb_obstacles, qos_profile_sensor_data)
 
@@ -259,6 +345,9 @@ class JevDecisionLayer(Node):
                 self.pending_inspections.clear()
             self.inspection_cooldowns.clear()
             self.visual_scan_locations.clear()
+            self.mission_started_at = time.monotonic()
+            self.completion_confidence_since = None
+            self.last_block_coverage_pct = 0.0
             self.cancel_current_action()
 
     def publish_status(self, text: str):
@@ -384,8 +473,20 @@ class JevDecisionLayer(Node):
         stride = max(1, int(0.55 / resolution))
         clearance = max(1, int(0.38 / resolution))
         references = list(self.visual_scan_locations)
-        if not references:
-            references = list(self.memory['visited_locations'])
+        visibility_m = getattr(self, 'camera_audit_visibility_m', 3.2)
+
+        def visually_covered(wx, wy, row, col):
+            for sx, sy in references:
+                if math.hypot(wx - sx, wy - sy) > visibility_m:
+                    continue
+                scan_col = int((sx - info.origin.position.x) / resolution)
+                scan_row = int((sy - info.origin.position.y) / resolution)
+                if (0 <= scan_col < info.width and 0 <= scan_row < info.height and
+                        grid_line_is_clear(
+                            grid, (scan_col, scan_row), (col, row))):
+                    return True
+            return False
+
         candidates = []
         for row in range(clearance, info.height - clearance, stride):
             for col in range(clearance, info.width - clearance, stride):
@@ -397,14 +498,14 @@ class JevDecisionLayer(Node):
                              col-clearance:col+clearance+1]
                 if patch.size == 0 or not np.all((patch >= 0) & (patch < 65)):
                     continue
+                if visually_covered(wx, wy, row, col):
+                    continue
                 travel = math.hypot(wx - cx, wy - cy)
                 if travel < 0.70:
                     continue
                 visual_gap = (min(math.hypot(wx - sx, wy - sy)
                                   for sx, sy in references)
-                              if references else travel)
-                if visual_gap < 0.85:
-                    continue
+                              if references else visibility_m)
                 blocked = any(expiry > time.monotonic() and
                               math.hypot(wx - bx, wy - by) < 1.0
                               for bx, by, expiry in self.blocked_targets)
@@ -416,6 +517,120 @@ class JevDecisionLayer(Node):
             return None
         _, wx, wy = max(candidates)
         return float(wx), float(wy)
+
+    def find_block_audit_goal(self):
+        """Return a safe representative viewpoint in an unscanned map block.
+
+        This is the fast 90%-coverage pass. Known free cells are divided into
+        coarse blocks, each block is represented by its safest cell nearest the
+        block centre, and blocks already containing a successful 360-degree
+        scan are removed. Blocks with residual unknown space are prioritised,
+        followed by camera distance and travel cost. No world or survivor
+        coordinates participate in this selection.
+        """
+        with self.grid_lock:
+            if self.grid is None or self.map_info is None:
+                return None
+            grid = self.grid.copy()
+            info = self.map_info
+        with self.pose_lock:
+            cx, cy = self.drone_x, self.drone_y
+
+        resolution = float(info.resolution)
+        clearance = max(1, int(0.38 / resolution))
+        stride = max(1, int(0.30 / resolution))
+        block_size = self.audit_block_size_m
+        visibility_m = getattr(self, 'camera_audit_visibility_m', 3.2)
+
+        def block_key(wx, wy):
+            return (int(math.floor((wx + ARENA_LIMIT) / block_size)),
+                    int(math.floor((wy + ARENA_LIMIT) / block_size)))
+
+        representatives = {}
+        for row in range(clearance, info.height - clearance, stride):
+            for col in range(clearance, info.width - clearance, stride):
+                wx = info.origin.position.x + (col + 0.5) * resolution
+                wy = info.origin.position.y + (row + 0.5) * resolution
+                if abs(wx) > 6.85 or abs(wy) > 6.85 or wy < -6.8:
+                    continue
+                key = block_key(wx, wy)
+                patch = grid[row-clearance:row+clearance+1,
+                             col-clearance:col+clearance+1]
+                if patch.size == 0 or not np.all((patch >= 0) & (patch < 65)):
+                    continue
+                centre_x = -ARENA_LIMIT + (key[0] + 0.5) * block_size
+                centre_y = -ARENA_LIMIT + (key[1] + 0.5) * block_size
+                centre_error = math.hypot(wx - centre_x, wy - centre_y)
+                previous = representatives.get(key)
+                if previous is None or centre_error < previous[0]:
+                    representatives[key] = (centre_error, wx, wy, row, col)
+
+        # A completed 360-degree scan observes every representative within
+        # reliable RGB-D range that has an unobstructed free-space ray. The old
+        # exact-block comparison severely under-counted real camera coverage.
+        scanned_blocks = set()
+        for key, (_, wx, wy, row, col) in representatives.items():
+            for sx, sy in self.visual_scan_locations:
+                if math.hypot(wx - sx, wy - sy) > visibility_m:
+                    continue
+                scan_col = int((sx - info.origin.position.x) / resolution)
+                scan_row = int((sy - info.origin.position.y) / resolution)
+                if (0 <= scan_col < info.width and 0 <= scan_row < info.height and
+                        grid_line_is_clear(
+                            grid, (scan_col, scan_row), (col, row))):
+                    scanned_blocks.add(key)
+                    break
+
+        total_blocks = len(representatives)
+        scanned_count = len(scanned_blocks)
+        self.last_block_coverage_pct = (
+            100.0 * scanned_count / total_blocks if total_blocks else 0.0)
+        candidates = []
+        search_px = max(1, int((block_size * 0.5) / resolution))
+        for key, (_, wx, wy, row, col) in representatives.items():
+            if key in scanned_blocks:
+                continue
+            if any(expiry > time.monotonic() and
+                   math.hypot(wx - bx, wy - by) < 1.0
+                   for bx, by, expiry in self.blocked_targets):
+                continue
+            r0, r1 = max(0, row-search_px), min(info.height, row+search_px+1)
+            c0, c1 = max(0, col-search_px), min(info.width, col+search_px+1)
+            area = grid[r0:r1, c0:c1]
+            unknown_ratio = (float(np.count_nonzero(area == UNKNOWN)) / area.size
+                             if area.size else 0.0)
+            camera_gap = (min(math.hypot(wx-sx, wy-sy)
+                              for sx, sy in self.visual_scan_locations)
+                          if self.visual_scan_locations else block_size)
+            travel = math.hypot(wx - cx, wy - cy)
+            score = 4.0 * unknown_ratio + camera_gap - 0.10 * travel
+            candidates.append((score, wx, wy))
+        if not candidates:
+            return None
+        _, wx, wy = max(candidates)
+        return float(wx), float(wy)
+
+    def find_unknown_focus_near(self, wx, wy, radius_m=1.8):
+        """Return the centroid of nearby unknown cells for camera orientation."""
+        with self.grid_lock:
+            if self.grid is None or self.map_info is None:
+                return None
+            grid = self.grid.copy()
+            info = self.map_info
+        resolution = float(info.resolution)
+        col = int((wx - info.origin.position.x) / resolution)
+        row = int((wy - info.origin.position.y) / resolution)
+        radius = max(1, int(radius_m / resolution))
+        r0, r1 = max(0, row-radius), min(info.height, row+radius+1)
+        c0, c1 = max(0, col-radius), min(info.width, col+radius+1)
+        unknown_r, unknown_c = np.where(grid[r0:r1, c0:c1] == UNKNOWN)
+        if len(unknown_r) < 3:
+            return None
+        focus_col = c0 + float(np.mean(unknown_c))
+        focus_row = r0 + float(np.mean(unknown_r))
+        focus_x = info.origin.position.x + (focus_col + 0.5) * resolution
+        focus_y = info.origin.position.y + (focus_row + 0.5) * resolution
+        return float(focus_x), float(focus_y)
 
     def _act_navigate(self, x, y, face_target=None, target_yaw=None,
                       ignore_blocked=False):
@@ -479,6 +694,7 @@ class JevDecisionLayer(Node):
         self.publish_status('OBSERVE: Active 360° RGB-D survivor scan')
         self.get_logger().info(
             f'🔄 [JEV] Starting {self.scan_headings}-view 360° camera scan at ({x:.2f}, {y:.2f})')
+        successful_views = 1  # Arrival heading was already observed.
         try:
             # The arrival heading is the first view. Visit the remaining evenly
             # spaced headings; 5 views overlap the stereo camera's 83° HFOV.
@@ -493,6 +709,8 @@ class JevDecisionLayer(Node):
                     time.sleep(0.10)
                 if self.is_acting:
                     self.cancel_current_action()
+                elif self.goal_status == "SUCCEEDED":
+                    successful_views += 1
                 # Three or more independent front RGB-D frames arrive here.
                 time.sleep(self.scan_dwell_s)
         finally:
@@ -500,11 +718,19 @@ class JevDecisionLayer(Node):
             self.route = []
             with self.pose_lock:
                 scan_position = (self.drone_x, self.drone_y)
-            if not self.visual_scan_locations or math.hypot(
-                    scan_position[0] - self.visual_scan_locations[-1][0],
-                    scan_position[1] - self.visual_scan_locations[-1][1]) > 0.25:
-                self.visual_scan_locations.append(scan_position)
-            self.get_logger().info('✅ [JEV] 360° RGB-D scan complete.')
+            required_views = max(2, int(math.ceil(self.scan_headings * 0.60)))
+            if successful_views >= required_views:
+                if not self.visual_scan_locations or math.hypot(
+                        scan_position[0] - self.visual_scan_locations[-1][0],
+                        scan_position[1] - self.visual_scan_locations[-1][1]) > 0.25:
+                    self.visual_scan_locations.append(scan_position)
+                self.get_logger().info(
+                    f'✅ [JEV] 360° RGB-D scan complete '
+                    f'({successful_views}/{self.scan_headings} views).')
+            else:
+                self.get_logger().warning(
+                    f'[JEV] Camera sweep incomplete ({successful_views}/'
+                    f'{self.scan_headings} views); block remains pending for audit.')
 
     def _goal_response_cb(self, future, generation):
         handle = future.result()
@@ -577,6 +803,8 @@ class JevDecisionLayer(Node):
             self._act_navigate(-5.80, -7.20)
             while self.is_acting: time.sleep(0.5)
 
+        # Ten minutes is a strategy-switch point, not a mission timeout.
+        self.mission_started_at = time.monotonic()
         consecutive_failures = 0
 
         while rclpy.ok():
@@ -587,8 +815,13 @@ class JevDecisionLayer(Node):
             # --- 1. OBSERVE ---
             with self.pose_lock:
                 pos = (self.drone_x, self.drone_y)
+            mission_elapsed = max(
+                0.0, time.monotonic() - (self.mission_started_at or time.monotonic()))
             cov = self.get_coverage()
             frontiers = self.find_frontiers()
+            completion_frontiers = [
+                frontier for frontier in frontiers
+                if frontier[2] >= self.completion_frontier_min_cells]
             self.memory['coverage'] = cov
             self.memory['frontiers'] = frontiers
             self.memory['position'] = pos
@@ -635,24 +868,52 @@ class JevDecisionLayer(Node):
 
             coverage_complete = sectors_toured and (
                 cov >= 95.0 or (cov >= 92.0 and len(frontiers) == 0))
+            audit_active = (
+                cov >= self.audit_start_coverage or
+                mission_elapsed >= self.audit_start_time_s)
+            # Always calculate block evidence for the confidence graph, but do
+            # not prioritise block visits until the 90%/10-minute strategy switch.
+            block_audit_goal = self.find_block_audit_goal()
             recovery_goal = (self.find_visual_recovery_goal()
-                             if coverage_complete else None)
+                             if coverage_complete and block_audit_goal is None else None)
             with self.inspection_lock:
                 pending_inspection_count = len(self.pending_inspections)
-            # There is deliberately no survivor-count target or maximum. The
-            # autonomous mission ends only after both LiDAR and camera-viewpoint
-            # coverage are exhausted and no active prospect remains to inspect.
-            visual_search_complete = (
-                coverage_complete and recovery_goal is None and
-                pending_inspection_count == 0)
-            return_needed = self.return_requested or visual_search_complete
+
+            search_confidence = calculate_search_confidence(
+                cov, self.last_block_coverage_pct, pending_inspection_count,
+                len(completion_frontiers), sectors_toured,
+                self.last_block_coverage_pct < self.camera_audit_completion_pct,
+                recovery_goal is not None)
+            self.pub_search_confidence.publish(Float32(data=search_confidence))
+
+            confidence_ready = (
+                search_confidence >= self.completion_confidence_threshold)
+            if confidence_ready:
+                if self.completion_confidence_since is None:
+                    self.completion_confidence_since = time.monotonic()
+            else:
+                self.completion_confidence_since = None
+            confidence_stable = (
+                self.completion_confidence_since is not None and
+                time.monotonic() - self.completion_confidence_since >=
+                self.completion_stability_s)
+            return_needed = self.return_requested or confidence_stable
+            phase = ('GAP CLOSURE' if audit_active and frontiers else
+                     'VISUAL AUDIT' if audit_active else 'EXPLORE')
             self.publish_status(
-                f"QUESTION: Cov={cov:.1f}% | Confirmed={self.survivor_count} | "
-                f"Visual gaps={'YES' if recovery_goal is not None else 'NO'} | "
-                f"Toured W={has_visited_west}/E={has_visited_east}")
+                f"{phase}: Trust={search_confidence:.1f}% | Map={cov:.1f}% | "
+                f"Visual={self.last_block_coverage_pct:.1f}% | "
+                f"Confirmed={self.survivor_count} | Pending={pending_inspection_count} | "
+                f"Gaps={len(completion_frontiers)}")
 
             if return_needed:
-                self.get_logger().info(f'🎯 [JEV] DECIDE: Return to Base triggered (Coverage={cov:.1f}%, Confirmed Survivors={self.survivor_count}, Manual={self.return_requested}).')
+                reason = ('MANUAL' if self.return_requested else
+                          'CONFIDENCE_STABLE')
+                self.get_logger().info(
+                    f'🎯 [JEV] DECIDE: Return to Base triggered '
+                    f'(Reason={reason}, Elapsed={mission_elapsed/60.0:.1f}min, '
+                    f'Trust={search_confidence:.1f}%, Coverage={cov:.1f}%, '
+                    f'Confirmed Survivors={self.survivor_count}).')
 
                 # Step 1: Fly safely through the maze corridors to South Gate opening
                 self.publish_status("ACT: Returning to Base — Navigating South Gate (-5.80, -7.20)")
@@ -692,23 +953,20 @@ class JevDecisionLayer(Node):
                     continue
                 break
 
+            if confidence_ready and not confidence_stable:
+                stable_for = time.monotonic() - self.completion_confidence_since
+                self.publish_status(
+                    f"VERIFY TRUST: {search_confidence:.1f}% stable for "
+                    f"{stable_for:.1f}/{self.completion_stability_s:.0f}s")
+                time.sleep(0.5)
+                continue
+
             # --- 3. THINK ---
             self.publish_status("THINK: Evaluating Frontier Heuristics & Obstacle Safety")
             best_action = None
 
-            # Once LiDAR mapping is effectively complete, fill every remaining
-            # camera-viewpoint gap regardless of the current survivor count.
-            if coverage_complete and recovery_goal is not None:
-                rx, ry = recovery_goal
-                self.publish_status(
-                    f"VISUAL RECOVERY: {self.survivor_count} confirmed; "
-                    f"scanning unseen viewpoint")
-                self.get_logger().info(
-                    f'👁️ [JEV] Continuing count-independent visual search; '
-                    f'{self.survivor_count} survivors currently confirmed, '
-                    f'camera-recovery waypoint=({rx:+.2f}, {ry:+.2f}).')
-                best_action = {'x': rx, 'y': ry, 'sz': 0}
-
+            # After ten minutes, meaningful black/unknown LiDAR gaps remain
+            # the first priority. Existing frontier scoring handles them here.
             if best_action is None and len(frontiers) > 0:
                 valid_options = []
                 for fx, fy, sz in frontiers:
@@ -746,6 +1004,20 @@ class JevDecisionLayer(Node):
                     best_action = valid_options[0]
                     self.get_logger().info(f'🧠 [JEV] THINK: Selected optimal frontier at ({best_action["x"]:.2f}, {best_action["y"]:.2f}) [score={best_action["score"]:.2f}, size={best_action["sz"]}].')
 
+            # After the black/unknown gaps, visit mapped blocks that never
+            # received a successful camera sweep.
+            if (best_action is None and audit_active and
+                    block_audit_goal is not None):
+                rx, ry = block_audit_goal
+                self.publish_status(
+                    f"BLOCK AUDIT: quick 360° check at ({rx:+.1f}, {ry:+.1f})")
+                best_action = {'x': rx, 'y': ry, 'sz': 0, 'kind': 'audit'}
+
+            # Finally close sub-block camera gaps before trust can exceed 97%.
+            if best_action is None and recovery_goal is not None:
+                rx, ry = recovery_goal
+                best_action = {'x': rx, 'y': ry, 'sz': 0, 'kind': 'recovery'}
+
             if best_action is None:
                 def available(tx, ty):
                     return not any(expiry > time.monotonic() and math.hypot(tx-bx, ty-by) < 1.0
@@ -767,13 +1039,16 @@ class JevDecisionLayer(Node):
 
             # --- 4. DECIDE ---
             target_x, target_y = best_action['x'], best_action['y']
+            action_kind = best_action.get('kind', 'frontier')
+            face_target = (self.find_unknown_focus_near(target_x, target_y)
+                           if audit_active else None)
             self.publish_status(f"DECIDE: Selected target waypoint ({target_x:.2f}, {target_y:.2f})")
             self.get_logger().info(f'🧠 [JEV] DECIDE: Navigating to ({target_x:.2f}, {target_y:.2f}).')
 
             # --- 5. ACT ---
             self.publish_status(f"ACT: Navigating corridor to ({target_x:.2f}, {target_y:.2f})")
             self.memory['expected_outcome'] = (target_x, target_y)
-            self._act_navigate(target_x, target_y)
+            self._act_navigate(target_x, target_y, face_target=face_target)
 
             act_start_time = time.time()
             progress_pos = pos
